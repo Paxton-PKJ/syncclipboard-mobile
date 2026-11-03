@@ -23,7 +23,7 @@ import { openFile, shareFile, saveToGallery } from '@/utils/fileActions';
 import { formatFileSize, formatSizeWithType, isTextInvalid } from '@/utils';
 import { saveContentDataToDirectory } from '@/utils/clipboard/clipboardContentUtils';
 import * as FileSystem from 'expo-file-system/legacy';
-import type { ProgressInfo } from 'native-util';
+import { ImageDragSource, type ProgressInfo } from 'native-util';
 import { ClipboardTypeIcon } from './ClipboardTypeIcon';
 
 interface DownloadProgress {
@@ -62,6 +62,7 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
 
   // 保存操作状态
   const [isSaving, setIsSaving] = useState(false);
+  const [loadedImageUri, setLoadedImageUri] = useState<string | null>(null);
   const [saveProgress, setSaveProgress] = useState<ProgressInfo | null>(null);
   const saveAbortControllerRef = useRef<AbortController | null>(null);
 
@@ -311,6 +312,27 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     }
   };
 
+  const canDragImage =
+    Platform.OS === 'android' &&
+    isRemote &&
+    !acting &&
+    clipboard.type === 'Image' &&
+    !!clipboard.fileUri?.startsWith('file:///') &&
+    loadedImageUri === clipboard.fileUri;
+  const imagePreview = clipboard.fileUri ? (
+    <Image
+      key={`image-${clipboard.fileUri}-${clipboard.localClipboardHash?.substring(0, 12)}`}
+      source={{ uri: clipboard.fileUri, cache: 'force-cache' }}
+      style={styles.imagePreview}
+      resizeMode="contain"
+      onError={(error) => {
+        setLoadedImageUri(null);
+        console.error('[CurrentClipboardCard] Image load error:', error.nativeEvent);
+      }}
+      onLoad={() => setLoadedImageUri(clipboard.fileUri!)}
+    />
+  ) : null;
+
   return (
     <View
       style={[
@@ -360,33 +382,26 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
         {clipboard.type === 'Image' && (
           <View style={styles.mediaPreview}>
             {clipboard.fileUri ? (
-              <>
-                <Image
-                  key={`image-${clipboard.fileUri}-${clipboard.localClipboardHash?.substring(0, 12)}`}
-                  source={{
-                    uri: clipboard.fileUri,
-                    cache: 'force-cache',
-                  }}
-                  style={styles.imagePreview}
-                  resizeMode="contain"
-                  onError={(error) => {
-                    console.error('[CurrentClipboardCard] Image load error:', error.nativeEvent);
-                    console.error('[CurrentClipboardCard] File URI:', clipboard.fileUri);
-                    console.error(
-                      '[CurrentClipboardCard] Content Hash:',
-                      clipboard.localClipboardHash?.substring(0, 8)
-                    );
-                  }}
-                  onLoad={() => {
-                    console.log(
-                      '[CurrentClipboardCard] Image loaded successfully:',
-                      clipboard.fileUri,
-                      'contentHash:',
-                      clipboard.localClipboardHash?.substring(0, 8)
-                    );
-                  }}
-                />
-              </>
+              canDragImage ? (
+                <>
+                  <ImageDragSource
+                    fileUri={clipboard.fileUri}
+                    expectedSize={clipboard.fileSize}
+                    style={styles.imagePreview}
+                    accessible
+                    accessibilityLabel={clipboard.fileName || t('clipboard.imageFileLabel')}
+                    accessibilityHint={t('clipboard.imageDragHint')}
+                    onDragStartFailed={() => showMessage(t('clipboard.imageDragFailed'), 'error')}
+                  >
+                    {imagePreview}
+                  </ImageDragSource>
+                  <Text style={[styles.dragHint, { color: theme.colors.textSecondary }]}>
+                    {t('clipboard.imageDragHint')}
+                  </Text>
+                </>
+              ) : (
+                imagePreview
+              )
             ) : (
               <View>
                 <Text style={[styles.mediaLabel, { color: theme.colors.textSecondary }]}>
@@ -696,6 +711,10 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 200,
     borderRadius: 8,
+  },
+  dragHint: {
+    fontSize: 12,
+    marginTop: 8,
   },
   mediaLabel: {
     fontSize: 15,

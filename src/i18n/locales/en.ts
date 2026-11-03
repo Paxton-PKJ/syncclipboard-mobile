@@ -83,6 +83,8 @@ const en: DeepString<typeof zh> = {
     empty: 'Clipboard is empty',
     emptyHint: 'Copied content will appear here',
     imageFileLabel: 'Image file',
+    imageDragHint: 'Long press to drag this image into another app',
+    imageDragFailed: 'Unable to start dragging. Download the image again and retry.',
     imageFallback: 'Image',
     fileFallback: 'File',
     openLink: 'Open URL',
