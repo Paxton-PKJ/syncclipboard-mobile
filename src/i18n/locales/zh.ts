@@ -76,6 +76,8 @@ const zh = {
     empty: '剪贴板为空',
     emptyHint: '复制内容后将在此显示',
     imageFileLabel: '图片文件',
+    imageDragHint: '长按图片可拖动到其他应用',
+    imageDragFailed: '无法开始拖动，请重新下载图片后重试',
     imageFallback: '图片',
     fileFallback: '文件',
     openLink: '打开链接',

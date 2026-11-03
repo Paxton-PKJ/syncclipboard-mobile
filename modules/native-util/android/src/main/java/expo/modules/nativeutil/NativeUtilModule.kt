@@ -86,6 +86,14 @@ class NativeUtilModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("NativeUtilModule")
 
+        View(ImageDragSourceView::class) {
+            Events("onDragStartFailed")
+            Prop("fileUri") { view: ImageDragSourceView, uri: String -> view.fileUri = uri }
+            Prop("expectedSize") { view: ImageDragSourceView, size: Double? ->
+                view.expectedSize = size?.takeIf { it.isFinite() && it > 0 }?.toLong()
+            }
+        }
+
         Events(
             EVENT_HASH_PROGRESS,
             EVENT_UPLOAD_PROGRESS,
