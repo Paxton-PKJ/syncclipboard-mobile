@@ -17,6 +17,19 @@ import java.util.concurrent.Executors
 
 /** 原生负责长按，普通滑动仍由父 ScrollView 拦截；拖拽开始后由系统接管。 */
 class ImageDragSourceView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
+    // Fabric 负责 React 子视图的测量和布局；ExpoView 的 LinearLayout 实现会覆盖其尺寸。
+    // 这里只按 View 的默认语义测量容器自身，不让 Android 重新测量子视图。
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        setMeasuredDimension(
+            View.getDefaultSize(suggestedMinimumWidth, widthMeasureSpec),
+            View.getDefaultSize(suggestedMinimumHeight, heightMeasureSpec)
+        )
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        // 子视图位置由 Fabric 设置，不能调用 LinearLayout.onLayout 重新排列。
+    }
+
     var fileUri: String = ""
     var expectedSize: Long? = null
     private val onDragStartFailed by EventDispatcher()

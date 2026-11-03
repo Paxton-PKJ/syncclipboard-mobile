@@ -46,8 +46,8 @@
 - [x] Validate file URI, nonempty regular file, optional positive expected size and decoded image MIME; snapshot into isolated cache and expire old completed snapshots after 24 hours.
 - [x] Run `npm run lint:fix`, `npm run type-check`, `npm run test`, `npm run format-docs`; inspect diff for unrelated formatting.
 - [x] Compile native-util Kotlin using the already generated Android project: `:native-util:compileDebugKotlin` completed; `:native-util:testDebugUnitTest` reported `NO-SOURCE`.
-- [x] Inspect SDK/JDK/adb availability and record device-based verification status: JBR 21.0.9, Android SDK 36 and an API 31 emulator (`emulator-5554`) are available; the app is not installed.
-- [ ] Verify preview layout, normal scrolling over the image, stationary long-press initiation and drag shadow on a device with a fully downloaded remote image displayed.
+- [x] Inspect SDK/JDK/adb availability: Android SDK 36 and an API 31 emulator are available; the release app was subsequently built and installed on the test emulator.
+- [x] Verify preview layout, normal scrolling over the image, and stationary long-press initiation with a fully downloaded remote image displayed; source drag logs contain image/png, content URI and flags 0x101. Drag-shadow appearance was not separately asserted by the screenshot script.
 - [ ] Verify a destination app accepts the drop and can read the image content URI after the source clipboard cache is cleaned.
 
 ### Validation results (2026-11-03)
@@ -57,6 +57,14 @@
 - `npm run format-docs` and `git diff --check`: passed; no unrelated tracked formatting changes.
 - Initial `:native-util:compileDebugKotlin :native-util:testDebugUnitTest` attempt failed because SDK location was unset. With `ANDROID_HOME` set, the default JBR 21.0.9 failed because its `bin/jlink.exe` is missing. Supplying `JAVA_HOME=C:/Program Files/Android/Android Studio/jbr` (21.0.10, with jlink) allowed the Kotlin compilation to complete.
 - No native-util `src/test` or `src/androidTest` files exist.
-- Final read-only review found no definite bug.
-- Device inspection: `adb -s emulator-5554 shell pm list packages syncclipboard` exited 0 with no matches; `adb -s emulator-5554 shell pm path com.jericx.syncclipboardmobile` exited 1 with no output. `adb -s emulator-5554 shell dumpsys activity activities` showed `com.android.launcher3/.uioverrides.QuickstepLauncher` as the resumed activity.
-- Device acceptance remains unverified: the app is absent, so there is no existing remote clipboard image preview available for long-press, scrolling or cross-app URI smoke testing. No APK was built or installed, and no temporary product test entry or user configuration was added for acceptance.
+- Initial device inspection found no installed app. Subsequent preview regression verification built/installed a release APK and configured only the disposable emulator with a dedicated local HTTP fixture backend.
+
+### Preview layout regression and fix (2026-11-03)
+
+- Root cause: `ExpoView` inherits Android `LinearLayout` measurement/layout. Calling its implementation remeasured/repositioned the Fabric-managed image child from 906×525 to 1×1. The content remained downloaded and draggable while its preview was blank; resizing the window happened to reveal it.
+- `ImageDragSourceView` now measures only itself with `View.getDefaultSize` and leaves child layout to Fabric with an empty `onLayout`. Temporary diagnostic logging was removed.
+- Actual red reproduction: A/B/C each had 0 fixture-color pixels before resize, versus 425,388 / 425,380 / 425,383 after resize; the reproduction exited 1. The blank B image still initiated a native drag.
+- Actual green: the release build completed in 58 seconds and installed successfully on the x86_64 test emulator. Two reproduction runs, including force-stop/restart, exited 0. A/B/C had 440,358 / 440,353 / 440,353 pixels before resize and 425,388 / 425,380 / 425,383 afterward.
+- Normal fast swipes scrolled without starting a drag. A stationary long press emitted a source drag with `image/png`, a `content://` URI and global/read flags `0x101`. These checks do not establish destination acceptance or URI readability after clipboard-cache cleanup; the user's separate report that dragging works is not counted as this regression run's cross-app test.
+- The persistent regression is `scripts/check-remote-image-preview.py`; setup and isolated-fixture instructions are in `scripts/check-remote-image-preview.md`. Generated images and screenshot evidence stay outside the repository. The script asserts visible image pixels both before and after resize, and restores the original display-size override in `finally`.
+- Persistent-script verification: `prepare` exited 0 against a new isolated fixture directory; `check --cycles 2 --restart-app com.jericx.syncclipboardmobile` exited 0 with all 12 screenshots passing and the same A/B/C pixel counts listed above in both cycles. Final `wm size` returned the original 1080×2400 physical size without an override. `npm run test` passed all 55 suites / 448 tests; Python syntax, documentation formatting and diff checks passed.
