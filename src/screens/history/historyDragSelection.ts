@@ -88,7 +88,7 @@ export interface HistorySelectionList {
   }): void;
 }
 
-/** 将原生窗口 dp 转换到 FlashList 内容坐标，布局缺失时不估算。 */
+/** 将手势容器本地 dp 转换到 FlashList 内容坐标，布局缺失时不估算。 */
 export function findHistoryDragIndex(
   x: number,
   y: number,
@@ -187,7 +187,7 @@ export class HistoryDragSelectionController {
         ids,
         anchor,
         baselineIds: new Set(this.deps.getSnapshot().selectedIds),
-        pointer: { x: event.absoluteX, y: event.absoluteY },
+        pointer: { x: event.x, y: event.y },
         viewportRequest: 0,
       };
       this.range = session;
@@ -198,11 +198,11 @@ export class HistoryDragSelectionController {
     } else if (this.range?.id === event.gestureId) {
       if (event.phase === 'end' || event.phase === 'cancel') this.stopRange();
       else {
-        this.range.pointer = { x: event.absoluteX, y: event.absoluteY };
+        this.range.pointer = { x: event.x, y: event.y };
         const viewport = this.range.viewport;
         if (
           viewport &&
-          Math.sign(historyEdgeVelocity(event.absoluteY, viewport.y, viewport.height)) !==
+          Math.sign(historyEdgeVelocity(event.y, viewport.y, viewport.height)) !==
             this.range.direction
         ) {
           this.range.direction = undefined;

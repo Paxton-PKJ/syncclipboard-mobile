@@ -25,7 +25,7 @@
 ## 已核实的本地 API
 
 - `node_modules/@shopify/flash-list/src/FlashListRef.ts` 提供 `getLayout(index): {x,y,width,height}|undefined`、`getFirstItemOffset()`、`getAbsoluteLastScrollOffset()`、`getChildContainerDimensions()`、`getWindowSize()`、`scrollToOffset({offset, animated, skipFirstItemOffset})`。getLayout.y 不含 firstItemOffset。
-- 用包裹列表的 RN View.measureInWindow 获取窗口坐标；native absoluteX/Y 必须将 rawX/rawY 转为 RN dp。同一坐标系下 `contentY = absoluteY - viewportTop + absoluteOffset - firstItemOffset`，以 getLayout 命中索引；布局未就绪时不猜索引。
+- 手势坐标统一使用手势容器本地 dp：native 发送 `event.x/y / density`（相对 HistoryGestureSurface 左上角），JS 视口取包裹 View 的 onLayout 尺寸且原点为 0。不得混用 rawX/rawY、getLocationOnScreen 或 measureInWindow，小窗（缩放或移动的自由窗口）下屏幕坐标与 RN 窗口坐标会偏移。同一坐标系下 `contentY = y - viewportTop + absoluteOffset - firstItemOffset`，以 getLayout 命中索引；布局未就绪时不猜索引。
 - `expo-modules-core` 的 ModuleDefinitionBuilder 允许多个 View；第一个仍是默认 View。保留 ImageDragSourceView 第一项，再注册具名 HistoryGestureSurfaceView/HistoryDragSourceView；JS 使用 `requireNativeViewManager('NativeUtilModule', 'HistoryGestureSurfaceView')` 等第二参数。
 - View 内 `AsyncFunction` 自动绑定 view owner 且在 MAIN 队列执行；JS adapter 将 ViewPrototypes 方法挂到 ref。包装组件使用 forwardRef 暴露下述 handle，IO 自行切换现有 executor。
 - RN 提供 `NativeGestureUtil.notifyNativeGestureStarted/Ended`。原生长按激活时通知 RN 并取消子触摸，避免 Pressable 在释放时误触；仅取消 Android 子事件不足以保证 JS responder 取消。
@@ -64,8 +64,8 @@ interface HistorySelectionGesture {
   gestureId: number;
   sourceId: string;
   phase: 'start' | 'move' | 'end' | 'cancel';
-  absoluteX: number;
-  absoluteY: number;
+  x: number;
+  y: number;
 }
 interface HistoryDragRequest {
   gestureId: number;

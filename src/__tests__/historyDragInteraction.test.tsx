@@ -26,7 +26,7 @@ jest.mock('native-util', () => ({
 jest.mock('@shopify/flash-list', () => ({
   FlashList: mockReact.forwardRef(
     (props: mockReact.PropsWithChildren<Record<string, unknown>>, ref) => {
-      mockReact.useImperativeHandle(ref, () => ({}));
+      mockReact.useImperativeHandle(ref, () => mockList);
       return mockReact.createElement('FlashList', props);
     }
   ),
@@ -47,6 +47,13 @@ jest.mock('../stores/messageStore', () => ({
 const mockSurface = {
   startDrag: jest.fn().mockResolvedValue({ started: true }),
   cancelGesture: jest.fn().mockResolvedValue(undefined),
+};
+const mockList = {
+  getLayout: (index: number) => ({ x: 0, y: index * 50, width: 300, height: 50 }),
+  getFirstItemOffset: () => 0,
+  getAbsoluteLastScrollOffset: () => 0,
+  getChildContainerDimensions: () => ({ width: 300, height: 100 }),
+  scrollToOffset: jest.fn(),
 };
 const mockSnapshot = {
   items: [
@@ -88,8 +95,8 @@ it('wires the stable surface to range selection, disables list scrolling, and ke
           gestureId: 100,
           sourceId: 'source',
           phase: 'start',
-          absoluteX: 10,
-          absoluteY: 10,
+          x: 10,
+          y: 10,
         },
       })
     );
@@ -107,8 +114,8 @@ it('wires the stable surface to range selection, disables list scrolling, and ke
           gestureId: 100,
           sourceId: 'source',
           phase: 'end',
-          absoluteX: 10,
-          absoluteY: 10,
+          x: 10,
+          y: 10,
         },
       })
     );
@@ -131,6 +138,67 @@ it('wires the stable surface to range selection, disables list scrolling, and ke
     expect(surface().props.gestureEpoch).toBeGreaterThan(epoch);
   } finally {
     await act(async () => root?.unmount());
+    testGlobal.IS_REACT_ACT_ENVIRONMENT = previousAct;
+  }
+});
+
+it('hit-tests surface-local pointer coordinates against the container size, independent of window offset', async () => {
+  const testGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousAct = testGlobal.IS_REACT_ACT_ENVIRONMENT;
+  testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  const previousItems = mockSnapshot.items;
+  mockSnapshot.items = ['A', 'B'].map((profileHash) =>
+    createHistoryItem({
+      profileHash,
+      type: 'Text',
+      text: profileHash,
+      hasData: false,
+      timestamp: 1,
+    })
+  );
+  mockSnapshot.selectedIds = new Set();
+  let root: ReturnType<typeof TestRenderer.create>;
+  try {
+    await act(async () => {
+      root = TestRenderer.create(
+        mockReact.createElement(HistoryGestureList, {
+          listProps: { data: mockSnapshot.items, renderItem: () => null },
+          scopeKey: 'local',
+          active: true,
+          multiSelect: false,
+          enterMultiSelect: jest.fn(),
+          onRangeActive: jest.fn(),
+          activeListRef: { current: null },
+        })
+      );
+    });
+    const surface = root!.root.findByType('HistoryGestureSurface');
+    // 小窗中容器位于窗口偏移处；该偏移不应参与本地坐标命中。
+    await act(async () =>
+      root.root
+        .find(
+          (node: { props: { onLayout?: unknown } }) => typeof node.props.onLayout === 'function'
+        )
+        .props.onLayout({
+          nativeEvent: { layout: { x: 0, y: 300, width: 300, height: 100 } },
+        })
+    );
+    const gesture = (phase: HistorySelectionGesture['phase'], y: number) =>
+      act(async () =>
+        surface.props.onSelectionGesture({
+          nativeEvent: { gestureId: 200, sourceId: 'A', phase, x: 100, y },
+        })
+      );
+    await gesture('start', 25);
+    await gesture('move', 75);
+    expect([...mockSnapshot.selectedIds]).toEqual(['A', 'B']);
+    await gesture('move', 25);
+    expect([...mockSnapshot.selectedIds]).toEqual(['A']);
+    await gesture('end', 25);
+  } finally {
+    await act(async () => root?.unmount());
+    mockSnapshot.items = previousItems;
+    mockSnapshot.selectedIds = new Set();
     testGlobal.IS_REACT_ACT_ENVIRONMENT = previousAct;
   }
 });
@@ -184,12 +252,8 @@ function fixture() {
     },
   };
   const controller = new HistoryDragSelectionController(deps);
-  const event = (
-    phase: HistorySelectionGesture['phase'],
-    absoluteY = 150,
-    sourceId = '0',
-    gestureId = 1
-  ) => controller.selection({ phase, absoluteY, absoluteX: 100, sourceId, gestureId });
+  const event = (phase: HistorySelectionGesture['phase'], y = 150, sourceId = '0', gestureId = 1) =>
+    controller.selection({ phase, y, x: 100, sourceId, gestureId });
   return {
     controller,
     deps,
@@ -315,12 +379,8 @@ function delayedScrollFixture() {
     contentHeight: (height: number) => {
       contentHeight = height;
     },
-    event: (
-      phase: HistorySelectionGesture['phase'],
-      absoluteY = 399,
-      sourceId = 'A',
-      gestureId = 1
-    ) => controller.selection({ phase, absoluteY, absoluteX: 100, sourceId, gestureId }),
+    event: (phase: HistorySelectionGesture['phase'], y = 399, sourceId = 'A', gestureId = 1) =>
+      controller.selection({ phase, y, x: 100, sourceId, gestureId }),
     report: (offset: number) => {
       observed = offset;
       controller.onScroll();

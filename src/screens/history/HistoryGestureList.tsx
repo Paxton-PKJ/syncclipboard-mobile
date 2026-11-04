@@ -24,7 +24,7 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
   const { t } = useTranslation();
   const latest = useRef(props);
   latest.current = props;
-  const viewportRef = useRef<View>(null);
+  const viewportSize = useRef<{ width: number; height: number } | null>(null);
   const listRef = useRef<FlashListRef<HistoryItem>>(null);
   const surfaceRef = useRef<HistoryGestureSurfaceHandle>(null);
   const [rangeActive, setRangeActive] = useState(false);
@@ -36,10 +36,10 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
       getVisibleIds: () => (latest.current.listProps.data ?? []).map((item) => item.profileHash),
       getList: () => listRef.current,
       getSurface: () => surfaceRef.current,
-      measureViewport: (callback) =>
-        viewportRef.current?.measureInWindow((x, y, width, height) =>
-          callback({ x, y, width, height })
-        ),
+      // 原生坐标相对手势容器，视口取容器自身尺寸，避免小窗下屏幕/窗口坐标偏移。
+      measureViewport: (callback) => {
+        if (viewportSize.current) callback({ x: 0, y: 0, ...viewportSize.current });
+      },
       select: (selectedIds) => useHistoryStore.setState({ selectedIds }),
       enterMultiSelect: () => latest.current.enterMultiSelect(),
       onRangeActive: (active) => {
@@ -78,10 +78,12 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
 
   return (
     <View
-      ref={viewportRef}
-      collapsable={false}
       style={styles.container}
-      onLayout={() => controller.onViewportChanged()}
+      onLayout={(event) => {
+        const { width, height } = event.nativeEvent.layout;
+        viewportSize.current = { width, height };
+        controller.onViewportChanged();
+      }}
     >
       <HistoryGestureSurface
         ref={surfaceRef}
