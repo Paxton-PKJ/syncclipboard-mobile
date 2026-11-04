@@ -3,9 +3,9 @@ package expo.modules.nativeutil
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Point
-import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -85,11 +85,11 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
             if (session?.started == true) return super.dispatchTouchEvent(event)
             cancelGesture()
             if (gestureEnabled) {
-                val marker = findMarker(this, event.rawX, event.rawY)
+                val marker = findMarker(this, event.x, event.y)
                 if (marker != null && marker.gestureMode != "disabled" && marker.sourceId.isNotEmpty()) {
                     session = HistoryGestureSession(ids.incrementAndGet(), marker.sourceId, marker.gestureMode)
                     sourceMarker = WeakReference(marker)
-                    downX = event.rawX; downY = event.rawY
+                    downX = event.x; downY = event.y
                     remember(event)
                     handler.postDelayed(activate, 500)
                 }
@@ -99,7 +99,7 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
         if (current != null && !current.started) {
             remember(event)
             if (!current.active && (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN ||
-                (event.actionMasked == MotionEvent.ACTION_MOVE && hypot(event.rawX - downX, event.rawY - downY) > slop))) {
+                (event.actionMasked == MotionEvent.ACTION_MOVE && hypot(event.x - downX, event.y - downY) > slop))) {
                 cancelGesture()
             } else if (current.active) {
                 when (event.actionMasked) {
@@ -197,20 +197,22 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
         lastTouch = null
         parent?.requestDisallowInterceptTouchEvent(false)
     }
+    // Surface-local dp: raw screen coordinates drift from RN window coordinates in scaled or
+    // moved freeform windows, while event.x/y stay in this view's own frame.
     private fun emitSelection(current: HistoryGestureSession, phase: String, event: MotionEvent) {
         val density = resources.displayMetrics.density
-        // RN Fabric ReactSurfaceView.viewportOffset subtracts this same visible window frame.
-        val frame = Rect(); getWindowVisibleDisplayFrame(frame)
         onSelectionGesture(mapOf("gestureId" to current.id, "sourceId" to current.sourceId,
-            "phase" to phase, "absoluteX" to (event.rawX - frame.left) / density,
-            "absoluteY" to (event.rawY - frame.top) / density))
+            "phase" to phase, "x" to event.x / density, "y" to event.y / density))
     }
+    /** Hit-tests in the parent's local coordinates, mirroring ViewGroup touch transformation. */
     private fun findMarker(view: View, x: Float, y: Float): HistoryDragSourceView? {
         if (view.visibility != View.VISIBLE) return null
-        val location = IntArray(2); view.getLocationOnScreen(location)
-        if (x < location[0] || y < location[1] || x >= location[0] + view.width || y >= location[1] + view.height) return null
+        if (x < 0 || y < 0 || x >= view.width || y >= view.height) return null
         if (view is ViewGroup) for (index in view.childCount - 1 downTo 0) {
-            findMarker(view.getChildAt(index), x, y)?.let { return it }
+            val child = view.getChildAt(index)
+            val point = floatArrayOf(x + view.scrollX - child.left, y + view.scrollY - child.top)
+            if (!child.matrix.isIdentity) Matrix().also { child.matrix.invert(it) }.mapPoints(point)
+            findMarker(child, point[0], point[1])?.let { return it }
         }
         return view as? HistoryDragSourceView
     }

@@ -31,8 +31,9 @@ export interface HistorySelectionGesture {
   gestureId: number;
   sourceId: string;
   phase: 'start' | 'move' | 'end' | 'cancel';
-  absoluteX: number;
-  absoluteY: number;
+  /** Pointer position in dp relative to the surface's own top-left corner. */
+  x: number;
+  y: number;
 }
 export interface HistoryDragRequest {
   gestureId: number;
