@@ -154,3 +154,11 @@ interface HistoryDragEnd {
 - 预览回归：验收要求至少 1 cycle 的 A/B/C 连续更新；现有脚本本次 1 cycle 为 PASS，A/B/C 未 resize 为 440354 / 440349 / 440349，resize 为 425388 / 425380 / 425383。先前 Fabric 修复已验证重启后重复且本轮原修复未动，本次按最终测试裁定满足预览验收；本次未执行 2 cycles。
 - 清场：HTTP fixture 服务已停止，模拟器分辨率恢复 1080 × 2400，所有 pointer 已 UP；ADB reverse 8765 保留。
 - 尚未覆盖：不能保证任意目标 app 支持 mixed ClipData；未单独 instrument 证明物理 row 回收，但真实边缘选择已到起点离屏且连续选中 30 项。逐项筛选/删除/触摸 cancel 的设备矩阵未全部单独运行，相关失效与取消由自动化覆盖。云端 APK 构建结果仍待 fork Actions 完成。
+
+## CI 测试发现修复与构建前置验证（2026-11-04）
+
+- 根因：CI 的 `npm ci` 会通过 workspace prepare 构建 native-util。模块原 `tsconfig.json` 包含整个 src，将桥接测试编译为 `build/__tests__/historyDragBridge.test.js` 和 `.d.ts`；Jest 的宽泛 `__tests__` 匹配同时发现源测试、编译后的 JS 和声明文件。声明文件没有测试而失败，编译后的 JS 重复执行两条用例。本地先执行 `npm run build --workspace=native-util` 后稳定复现：1 failed、59 passed、60 suites，491 tests passed；日志为 `D:/Temp/gallery-drag-acceptance/ci-local-unit-after-native-build.log`。
+- 修复：native-util 构建保留原排除项，并排除 `src/__tests__`、`src/**/*.test.*` 与 `src/**/*.spec.*`；Jest 保留 node_modules 默认忽略，并忽略 `modules/*/build/` 生成目录，避免已有构建缓存或其他模块编译测试被重复发现。源桥接测试继续参与运行。
+- 缓存回归：先仅修改 Jest 配置，保留旧 `build/__tests__` 产物运行原命令 `npm test`。首次运行源 SettingsScreen 用例触发既有 5000ms 超时（57 suites / 488 tests passed，1 failed）；发现数量已恢复为 58 suites / 489 tests。原命令重试 exit 0，58 suites、489 tests 全部通过，无编译测试重复执行。日志为 `ci-unit-stale-build-jest-fix.log` 与 `ci-unit-stale-build-jest-fix-retry.log`，均位于上述目录。
+- 构建前置验收：验证真实绝对路径后，仅删除已知生成目录 `modules/native-util/build/__tests__`，保留其他 build 产物及源测试。执行 `npm run lint:fix` → `npm run type-check` → `npm run build --workspace=native-util` → `npm test` → `npm run test:coverage`，全部 exit 0；两次最终 Jest 运行均为 58 suites、489 tests passed，保持 CI 原命令，未添加 `--runInBand`。构建后目录仍无 `__tests__`；`npx jest --listTests --json` 确认恰好 58 条源测试路径，含源桥接测试且无 `modules/*/build/` 路径。
+- 日志：`D:/Temp/gallery-drag-acceptance/ci-discovery-fix-{lint,type-check,native-build,test,coverage}.log`；发现列表为同目录 `ci-discovery-fix-list-tests.json`。本次只修改构建排除、Jest 配置和本文档，未修改 native/UI 生产行为；云端新 head 验证仍待后续运行。
