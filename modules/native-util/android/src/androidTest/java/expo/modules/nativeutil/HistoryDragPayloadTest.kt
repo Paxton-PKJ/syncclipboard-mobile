@@ -5,12 +5,119 @@ import android.content.ClipData
 import android.content.ClipDescription
 import android.net.Uri
 import android.os.Parcel
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.test.AndroidTestCase
+import android.view.MotionEvent
+import android.widget.FrameLayout
+import android.widget.TextView
+import com.facebook.react.bridge.BridgeReactContext
+import expo.modules.kotlin.AppContext
+import expo.modules.kotlin.ModulesProvider
+import expo.modules.kotlin.modules.Module
 import java.io.File
+import java.lang.ref.WeakReference
+import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** 使用设备真实 Parcel、图片探测和 FileProvider 验证整组数据。 */
 class HistoryDragPayloadTest : AndroidTestCase() {
+    private fun onMain(block: () -> Unit) {
+        val finished = CountDownLatch(1)
+        var failure: Throwable? = null
+        Handler(Looper.getMainLooper()).post {
+            try { block() } catch (error: Throwable) { failure = error } finally { finished.countDown() }
+        }
+        assertTrue("Main thread finished", finished.await(60, TimeUnit.SECONDS))
+        failure?.let { throw it }
+    }
+
+    /** 实际父子 dispatch：静态文本不消费 DOWN，Surface 必须持有后续 UP/CANCEL。 */
+    fun testPendingStaticTextOwnsTouchUntilUpOrParentCancel() = onMain {
+        val reactContext = BridgeReactContext(context)
+        val appContext = AppContext(object : ModulesProvider {
+            override fun getModulesMap(): Map<Class<out Module>, String?> = emptyMap()
+        }, expo.modules.core.ModuleRegistry(emptyList(), emptyList()), WeakReference(reactContext))
+        val parentEvents = mutableListOf<Int>()
+        var interceptMove = false
+        val parent = object : FrameLayout(context) {
+            override fun onInterceptTouchEvent(event: MotionEvent): Boolean =
+                interceptMove && event.actionMasked == MotionEvent.ACTION_MOVE
+            override fun onTouchEvent(event: MotionEvent): Boolean {
+                parentEvents.add(event.actionMasked)
+                return true
+            }
+        }
+        val surface = HistoryGestureSurfaceView(context, appContext)
+        val marker = HistoryDragSourceView(context, appContext).apply {
+            sourceId = "static-text"
+            gestureMode = "drag"
+        }
+        val text = TextView(context).apply { this.text = "Static text" }
+        val surfaceEvents = mutableListOf<Int>()
+        surface.setOnTouchListener { _, event -> surfaceEvents.add(event.actionMasked); false }
+        parent.addView(surface)
+        surface.addView(marker)
+        marker.addView(text)
+        parent.layout(0, 0, 200, 200)
+        surface.layout(0, 0, 200, 200)
+        marker.layout(0, 0, 200, 200)
+        text.layout(0, 0, 200, 200)
+        val downTime = SystemClock.uptimeMillis()
+        fun dispatch(action: Int, x: Float = 20f) {
+            val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, x, 20f, 0)
+            try { assertTrue(parent.dispatchTouchEvent(event)) } finally { event.recycle() }
+        }
+        fun assertPendingCleared() {
+            listOf("session", "lastTouch").forEach { name ->
+                val field = HistoryGestureSurfaceView::class.java.getDeclaredField(name).apply { isAccessible = true }
+                assertNull("$name cleared by actual terminal event", field.get(surface))
+            }
+        }
+        try {
+            dispatch(MotionEvent.ACTION_DOWN)
+            assertTrue("Surface retains DOWN instead of falling through to parent", parentEvents.isEmpty())
+            dispatch(MotionEvent.ACTION_UP)
+            assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP), surfaceEvents)
+            assertPendingCleared()
+
+            surfaceEvents.clear()
+            dispatch(MotionEvent.ACTION_DOWN)
+            interceptMove = true
+            dispatch(MotionEvent.ACTION_MOVE, 100f)
+            dispatch(MotionEvent.ACTION_MOVE, 120f)
+            dispatch(MotionEvent.ACTION_UP, 100f)
+            assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_CANCEL), surfaceEvents)
+            assertTrue("Parent can intercept and scroll", parentEvents.contains(MotionEvent.ACTION_MOVE))
+            assertPendingCleared()
+
+            interceptMove = false
+            parentEvents.clear()
+            val childEvents = mutableListOf<Int>()
+            text.isClickable = true
+            text.setOnTouchListener { _, event -> childEvents.add(event.actionMasked); false }
+            dispatch(MotionEvent.ACTION_DOWN)
+            dispatch(MotionEvent.ACTION_UP)
+            assertEquals("Pending recognition preserves clickable child events",
+                listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP), childEvents)
+            assertPendingCleared()
+
+            text.isClickable = false
+            for (enabled in listOf(true, false)) {
+                surface.gestureEnabled = enabled
+                marker.gestureMode = if (enabled) "disabled" else "drag"
+                parentEvents.clear()
+                dispatch(MotionEvent.ACTION_DOWN)
+                dispatch(MotionEvent.ACTION_UP)
+                assertEquals("Disabled candidate falls through", listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP), parentEvents)
+                assertPendingCleared()
+            }
+        } finally { surface.cancelGesture() }
+    }
+
     private fun image(name: String, format: Bitmap.CompressFormat): File {
         val file = File(context.cacheDir, name)
         val bitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
@@ -134,5 +241,57 @@ class HistoryDragPayloadTest : AndroidTestCase() {
         val started = HistoryGestureSession(3, "drag", "drag")
         started.activate(); started.beginPreparing(); started.started = true; started.cancel()
         assertFalse(started.cancelled)
+    }
+
+    fun testLegacyTextCharacterSizeRequiresCompleteContentHash() {
+        val text = "旧记录中文🙂é\n".repeat(100) + "FULL_TEXT_TAIL"
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        fun hash(value: ByteArray) = MessageDigest.getInstance("SHA-256").digest(value)
+            .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+        val id = hash(bytes)
+        val file = File(context.cacheDir, "legacy-character-size.txt").apply { writeBytes(bytes) }
+        fun legacy(sourceId: String = id, expected: Long = text.length.toLong()) = mapOf<String, Any?>(
+            "id" to sourceId, "kind" to "textFile", "fileUri" to Uri.fromFile(file).toString(), "expectedSize" to expected
+        )
+        fun assertFullText(item: Map<String, Any?>, expected: String) {
+            val payload = HistoryDragPayload.prepare(context, listOf(item)) { false }
+            try {
+                val actual = payload.clipData.getItemAt(0).text.toString()
+                assertEquals(expected, actual)
+                assertTrue(expected.toByteArray(Charsets.UTF_8).contentEquals(actual.toByteArray(Charsets.UTF_8)))
+            } finally { payload.discard() }
+        }
+        assertTrue(text.length < bytes.size)
+        assertFullText(legacy(), text)
+        assertFullText(legacy(id.uppercase()), text)
+
+        file.writeText(text.replaceFirst("旧", "新"))
+        failure("SOURCE_CHANGED", listOf(legacy()))
+        file.writeText(text.dropLast(1))
+        failure("SOURCE_CHANGED", listOf(legacy()))
+        file.writeBytes(bytes)
+        failure("SOURCE_CHANGED", listOf(legacy("legacy-non-hash-id")))
+        failure("SOURCE_CHANGED", listOf(legacy("0".repeat(64))))
+        failure("SOURCE_CHANGED", listOf(legacy(expected = text.length.toLong() - 1)))
+        failure("SOURCE_CHANGED", listOf(legacy(expected = bytes.size.toLong() + 1)))
+        var checks = 0
+        failure("SOURCE_CHANGED", listOf(legacy())) {
+            if (++checks == 3) assertTrue(file.setLastModified(file.lastModified() + 2000))
+            false
+        }
+        checks = 0
+        failure("CANCELLED", listOf(legacy())) { ++checks == 3 }
+        assertFullText(legacy("normal-byte-metadata", bytes.size.toLong()), text)
+
+        val ascii = "ASCII unchanged"
+        file.writeText(ascii)
+        assertFullText(legacy("normal-ascii", ascii.length.toLong()), ascii)
+        val invalid = byteArrayOf(0xc3.toByte(), 0x28, 0x61)
+        file.writeBytes(invalid)
+        failure("INVALID_TEXT", listOf(legacy(hash(invalid), 1)))
+        val oversized = "界".repeat(43691)
+        val oversizedBytes = oversized.toByteArray(Charsets.UTF_8)
+        file.writeBytes(oversizedBytes)
+        failure("PAYLOAD_TOO_LARGE", listOf(legacy(hash(oversizedBytes), oversized.length.toLong())))
     }
 }
