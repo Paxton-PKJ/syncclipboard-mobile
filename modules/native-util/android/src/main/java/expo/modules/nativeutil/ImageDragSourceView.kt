@@ -101,7 +101,7 @@ class ImageDragSourceView(context: Context, appContext: AppContext) : ExpoView(c
                 if (prepared == null) {
                     fail()
                 } else if (!touching || !isAttachedToWindow || fileUri != source || appContext.currentActivity == null) {
-                    ImageDragFileStore.release(prepared)
+                    ImageDragFileStore.discard(prepared)
                     fail()
                 } else {
                     snapshot = prepared
@@ -112,7 +112,7 @@ class ImageDragSourceView(context: Context, appContext: AppContext) : ExpoView(c
                     }.getOrDefault(false)
                     if (!started) {
                         snapshot = null
-                        ImageDragFileStore.release(prepared)
+                        ImageDragFileStore.discard(prepared)
                         fail()
                     }
                 }

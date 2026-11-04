@@ -16,7 +16,9 @@ internal object ImageDragFileStore {
 
     data class Snapshot(val file: File, val uri: Uri, val mimeType: String)
 
-    fun prepare(context: Context, fileUri: String, expectedSize: Long?): Snapshot {
+    fun prepare(context: Context, fileUri: String, expectedSize: Long?, isCancelled: () -> Boolean = { false }): Snapshot {
+        fun checkCancelled() { if (isCancelled()) throw HistoryDragFailure("CANCELLED") }
+        checkCancelled()
         val uri = Uri.parse(fileUri)
         require(uri.scheme == "file" && uri.authority.isNullOrEmpty()) { "Local file URI required" }
         val source = File(requireNotNull(uri.path)).canonicalFile
@@ -35,7 +37,16 @@ internal object ImageDragFileStore {
         val target = File(directory, UUID.randomUUID().toString())
         activeFiles.add(target.absolutePath)
         try {
-            source.inputStream().use { input -> target.outputStream().use { input.copyTo(it) } }
+            source.inputStream().use { input -> target.outputStream().use { output ->
+                val buffer = ByteArray(8192)
+                while (true) {
+                    checkCancelled()
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    output.write(buffer, 0, count)
+                }
+            } }
+            checkCancelled()
             check(target.length() == size && source.length() == size && source.lastModified() == modified) {
                 "Image changed while preparing drag"
             }
@@ -71,7 +82,11 @@ internal object ImageDragFileStore {
 
     fun release(snapshot: Snapshot) {
         // 从拖拽结束计时，给目标应用时间读取；下一次拖拽时才清理过期快照。
-        snapshot.file.setLastModified(System.currentTimeMillis())
+        if (activeFiles.remove(snapshot.file.absolutePath)) snapshot.file.setLastModified(System.currentTimeMillis())
+    }
+
+    fun discard(snapshot: Snapshot) {
         activeFiles.remove(snapshot.file.absolutePath)
+        snapshot.file.delete()
     }
 }

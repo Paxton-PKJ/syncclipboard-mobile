@@ -314,7 +314,6 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
 
   const canDragImage =
     Platform.OS === 'android' &&
-    isRemote &&
     !acting &&
     clipboard.type === 'Image' &&
     !!clipboard.fileUri?.startsWith('file:///') &&
