@@ -4,7 +4,16 @@
  */
 
 import React, { useState, forwardRef, useMemo, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Pressable, Image, TouchableOpacity, Linking } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  Image,
+  TouchableOpacity,
+  Linking,
+  Platform,
+} from 'react-native';
 import { Copy, Download, Share, Link2, Scissors } from 'react-native-feather';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { StarIcon } from './StarIcon';
@@ -16,7 +25,7 @@ import { getHistoryTransferQueue } from '@/services/history/HistoryTransferQueue
 import { getProfileId, formatSizeWithType, formatFileSize } from '@/utils';
 import { useSettingsStore } from '@/stores';
 import { useTranslation } from 'react-i18next';
-import type { ProgressInfo } from 'native-util';
+import { HistoryDragSource, type ProgressInfo } from 'native-util';
 
 const ACTION_ICON_SIZE = 15;
 
@@ -197,9 +206,9 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
       return match ? match[0] : null;
     }, [item.type, item.text]);
 
-    return (
+    const content = (
       <Pressable
-        onLongPress={() => onLongPress(item)}
+        onLongPress={Platform.OS === 'android' ? undefined : () => onLongPress(item)}
         onPress={isMultiSelectMode ? () => onPress?.(item) : undefined}
         style={({ pressed }) => [
           styles.touchable,
@@ -668,6 +677,14 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
           </View>
         </View>
       </Pressable>
+    );
+    return (
+      <HistoryDragSource
+        sourceId={item.profileHash}
+        gestureMode={isMultiSelectMode && isSelected ? 'drag' : 'select'}
+      >
+        {content}
+      </HistoryDragSource>
     );
   }
 );

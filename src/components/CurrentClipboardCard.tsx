@@ -23,8 +23,13 @@ import { openFile, shareFile, saveToGallery } from '@/utils/fileActions';
 import { formatFileSize, formatSizeWithType, isTextInvalid } from '@/utils';
 import { saveContentDataToDirectory } from '@/utils/clipboard/clipboardContentUtils';
 import * as FileSystem from 'expo-file-system/legacy';
-import type { ProgressInfo } from 'native-util';
+import { ImageDragSource, type HistoryDragItem, type ProgressInfo } from 'native-util';
 import { ClipboardTypeIcon } from './ClipboardTypeIcon';
+import { ClipboardTextDragSource } from './ClipboardTextDragSource';
+
+// 原生文件拖拽要求无 authority 的绝对 file URI，支持 file:/ 和 file:///。
+const isLocalDragFileUri = (uri?: string): uri is string =>
+  !!uri && /^file:\/(?:\/\/)?[^/]/.test(uri);
 
 interface DownloadProgress {
   progress: number;
@@ -62,8 +67,51 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
 
   // 保存操作状态
   const [isSaving, setIsSaving] = useState(false);
+  const [loadedImageIdentity, setLoadedImageIdentity] = useState<string | null>(null);
   const [saveProgress, setSaveProgress] = useState<ProgressInfo | null>(null);
   const saveAbortControllerRef = useRef<AbortController | null>(null);
+  const imageIdentity = JSON.stringify([
+    clipboard?.type,
+    clipboard?.fileUri,
+    clipboard?.fileSize,
+    clipboard?.localClipboardHash,
+    clipboard?.profileHash,
+    clipboard?.timestamp,
+  ]);
+  const currentImageIdentityRef = useRef<string | null>(imageIdentity);
+  const mountedRef = useRef(true);
+  currentImageIdentityRef.current = imageIdentity;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const remoteDragBlocked = isRemote && acting;
+  const textDragItem = useMemo<HistoryDragItem | null>(() => {
+    if (clipboard?.type !== 'Text' || remoteDragBlocked) return null;
+    if (clipboard.hasData) {
+      if (!isLocalDragFileUri(clipboard.fileUri)) return null;
+      return {
+        id: 'clipboard-text',
+        kind: 'textFile',
+        fileUri: clipboard.fileUri,
+        expectedSize: clipboard.fileSize,
+      };
+    }
+    if (!clipboard.text) return null;
+    return { id: 'clipboard-text', kind: 'text', text: clipboard.text };
+  }, [
+    clipboard?.type,
+    clipboard?.hasData,
+    clipboard?.fileUri,
+    clipboard?.fileSize,
+    clipboard?.text,
+    clipboard?.localClipboardHash,
+    clipboard?.profileHash,
+    clipboard?.timestamp,
+    remoteDragBlocked,
+  ]);
 
   // 监控 clipboard 变化并强制更新
   useEffect(() => {
@@ -311,6 +359,30 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     }
   };
 
+  const canDragImage =
+    Platform.OS === 'android' &&
+    !remoteDragBlocked &&
+    clipboard.type === 'Image' &&
+    isLocalDragFileUri(clipboard.fileUri) &&
+    loadedImageIdentity === imageIdentity;
+  const imagePreview = clipboard.fileUri ? (
+    <Image
+      key={imageIdentity}
+      source={{ uri: clipboard.fileUri, cache: 'force-cache' }}
+      style={styles.imagePreview}
+      resizeMode="contain"
+      onError={(error) => {
+        if (mountedRef.current && currentImageIdentityRef.current === imageIdentity)
+          setLoadedImageIdentity(null);
+        console.error('[CurrentClipboardCard] Image load error:', error.nativeEvent);
+      }}
+      onLoad={() => {
+        if (mountedRef.current && currentImageIdentityRef.current === imageIdentity)
+          setLoadedImageIdentity(imageIdentity);
+      }}
+    />
+  ) : null;
+
   return (
     <View
       style={[
@@ -339,9 +411,17 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
           </View>
         </View>
 
-        {clipboard.fileSize !== undefined && (
+        {(clipboard.fileSize !== undefined || clipboard.textLength !== undefined) && (
           <Text style={[styles.sizeLabel, { color: theme.colors.textSecondary }]}>
-            {formatSizeWithType(clipboard.fileSize, clipboard.type)}
+            {clipboard.type === 'Text'
+              ? clipboard.textLength !== undefined
+                ? formatSizeWithType(clipboard.textLength, 'Text')
+                : !clipboard.hasData
+                  ? formatSizeWithType(clipboard.text.length, 'Text')
+                  : clipboard.fileSize !== undefined
+                    ? formatSizeWithType(clipboard.fileSize)
+                    : ''
+              : formatSizeWithType(clipboard.fileSize, clipboard.type)}
           </Text>
         )}
       </View>
@@ -349,44 +429,45 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
       {/* 内容预览 */}
       <View style={styles.content}>
         {clipboard.type === 'Text' && (
-          <Text
-            style={[styles.previewText, { color: theme.colors.text }]}
-            numberOfLines={isLongText ? 8 : undefined}
-          >
-            {previewText}
-          </Text>
+          <ClipboardTextDragSource item={textDragItem}>
+            <Text
+              style={[styles.previewText, { color: theme.colors.text }]}
+              numberOfLines={isLongText ? 8 : undefined}
+              selectable={Platform.OS !== 'android'}
+            >
+              {previewText}
+            </Text>
+          </ClipboardTextDragSource>
         )}
 
         {clipboard.type === 'Image' && (
           <View style={styles.mediaPreview}>
             {clipboard.fileUri ? (
-              <>
-                <Image
-                  key={`image-${clipboard.fileUri}-${clipboard.localClipboardHash?.substring(0, 12)}`}
-                  source={{
-                    uri: clipboard.fileUri,
-                    cache: 'force-cache',
-                  }}
-                  style={styles.imagePreview}
-                  resizeMode="contain"
-                  onError={(error) => {
-                    console.error('[CurrentClipboardCard] Image load error:', error.nativeEvent);
-                    console.error('[CurrentClipboardCard] File URI:', clipboard.fileUri);
-                    console.error(
-                      '[CurrentClipboardCard] Content Hash:',
-                      clipboard.localClipboardHash?.substring(0, 8)
-                    );
-                  }}
-                  onLoad={() => {
-                    console.log(
-                      '[CurrentClipboardCard] Image loaded successfully:',
-                      clipboard.fileUri,
-                      'contentHash:',
-                      clipboard.localClipboardHash?.substring(0, 8)
-                    );
-                  }}
-                />
-              </>
+              canDragImage ? (
+                <>
+                  <ImageDragSource
+                    key={imageIdentity}
+                    fileUri={clipboard.fileUri}
+                    expectedSize={clipboard.fileSize}
+                    style={styles.imagePreview}
+                    accessible
+                    accessibilityLabel={clipboard.fileName || t('clipboard.imageFileLabel')}
+                    accessibilityHint={t('clipboard.imageDragHint')}
+                    onDragStartFailed={() => {
+                      if (mountedRef.current && currentImageIdentityRef.current === imageIdentity) {
+                        showMessage(t('clipboard.imageDragFailed'), 'error');
+                      }
+                    }}
+                  >
+                    {imagePreview}
+                  </ImageDragSource>
+                  <Text style={[styles.dragHint, { color: theme.colors.textSecondary }]}>
+                    {t('clipboard.imageDragHint')}
+                  </Text>
+                </>
+              ) : (
+                imagePreview
+              )
             ) : (
               <View>
                 <Text style={[styles.mediaLabel, { color: theme.colors.textSecondary }]}>
@@ -696,6 +777,10 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 200,
     borderRadius: 8,
+  },
+  dragHint: {
+    fontSize: 12,
+    marginTop: 8,
   },
   mediaLabel: {
     fontSize: 15,

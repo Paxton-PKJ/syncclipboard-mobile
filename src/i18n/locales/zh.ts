@@ -76,6 +76,11 @@ const zh = {
     empty: '剪贴板为空',
     emptyHint: '复制内容后将在此显示',
     imageFileLabel: '图片文件',
+    imageDragHint: '长按图片可拖动到其他应用',
+    textDragHint: '长按可将完整文本拖动到其他应用',
+    textDragFailed: '无法拖出文本，请重试。',
+    textDragTooLarge: '完整文本超过拖拽大小限制，请使用复制或分享。',
+    imageDragFailed: '无法开始拖动，请重新下载图片后重试',
     imageFallback: '图片',
     fileFallback: '文件',
     openLink: '打开链接',
@@ -98,6 +103,11 @@ const zh = {
   },
 
   history: {
+    dragUnsupported: '选中项包含文件或文件组，仅支持拖出图片和文本，请调整选择。',
+    dragMissing: '部分选中项已不存在，请调整选择后重试。',
+    dragNotReady: '部分选中图片或完整文本文件不可用或已变化，请重新下载后重试。',
+    dragTooLarge: '完整文本或选中内容超过拖拽大小限制，请减少选择；文本不会被截断。',
+    dragFailed: '无法拖出选中内容，请重试。',
     loadFailed: '历史记录加载失败，原数据已保留',
     tabAll: '全部',
     tabText: '文本',

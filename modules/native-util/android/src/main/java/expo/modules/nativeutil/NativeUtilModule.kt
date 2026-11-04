@@ -86,6 +86,29 @@ class NativeUtilModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("NativeUtilModule")
 
+        View(ImageDragSourceView::class) {
+            Events("onDragStartFailed")
+            Prop("fileUri") { view: ImageDragSourceView, uri: String -> view.fileUri = uri }
+            Prop("expectedSize") { view: ImageDragSourceView, size: Double? ->
+                view.expectedSize = size?.takeIf { it.isFinite() && it > 0 }?.toLong()
+            }
+        }
+
+        View(HistoryGestureSurfaceView::class) {
+            Events("onSelectionGesture", "onDragRequested", "onDragEnded")
+            Prop("gestureEpoch") { view: HistoryGestureSurfaceView, epoch: Int -> view.gestureEpoch = epoch }
+            Prop("enabled") { view: HistoryGestureSurfaceView, enabled: Boolean -> view.gestureEnabled = enabled }
+            AsyncFunction("startDrag") { view: HistoryGestureSurfaceView, gestureId: Int, items: List<Map<String, Any?>>, promise: Promise ->
+                view.startDrag(gestureId, items, promise)
+            }
+            AsyncFunction("cancelGesture") { view: HistoryGestureSurfaceView -> view.cancelGesture() }
+        }
+
+        View(HistoryDragSourceView::class) {
+            Prop("sourceId") { view: HistoryDragSourceView, id: String -> view.sourceId = id }
+            Prop("gestureMode") { view: HistoryDragSourceView, mode: String -> view.gestureMode = mode }
+        }
+
         Events(
             EVENT_HASH_PROGRESS,
             EVENT_UPLOAD_PROGRESS,
