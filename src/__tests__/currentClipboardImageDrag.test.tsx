@@ -77,25 +77,32 @@ async function loadImage() {
   await act(async () => root.root.findByType(Image).props.onLoad());
 }
 
-it('enables dragging only after the downloaded remote image is displayed and reports native failure', async () => {
-  await render(image);
-  expect(sources()).toHaveLength(0);
-  await loadImage();
-  expect(sources()).toHaveLength(1);
-  expect(sources()[0].props).toMatchObject({
-    fileUri: image.fileUri,
-    expectedSize: 1000,
-    accessibilityHint: 'clipboard.imageDragHint',
-  });
-  expect(mockShowMessage).not.toHaveBeenCalled();
-  await act(async () => sources()[0].props.onDragStartFailed());
-  expect(mockShowMessage).toHaveBeenCalledWith('clipboard.imageDragFailed', 'error');
-});
+it.each([
+  ['remote', true],
+  ['local', false],
+] as const)(
+  'enables dragging only after the %s image is displayed and reports native failure',
+  async (_label, remote) => {
+    await render(image, remote);
+    expect(sources()).toHaveLength(0);
+    await loadImage();
+    expect(sources()).toHaveLength(1);
+    expect(sources()[0].props).toMatchObject({
+      fileUri: image.fileUri,
+      expectedSize: 1000,
+      accessibilityHint: 'clipboard.imageDragHint',
+    });
+    expect(mockShowMessage).not.toHaveBeenCalled();
+    await act(async () => sources()[0].props.onDragStartFailed());
+    expect(mockShowMessage).toHaveBeenCalledWith('clipboard.imageDragFailed', 'error');
+  }
+);
 
 it.each([
-  ['local card', false, false, 'android'],
   ['active download', true, true, 'android'],
+  ['active upload', false, true, 'android'],
   ['iOS', true, false, 'ios'],
+  ['local iOS card', false, false, 'ios'],
 ] as const)('keeps an ordinary preview for %s', async (_label, remote, acting, platform) => {
   Platform.OS = platform;
   await render(image, remote, acting);
@@ -108,23 +115,29 @@ it.each(['Text', 'File', 'Group'] as const)('never enables dragging for %s', asy
   expect(sources()).toHaveLength(0);
 });
 
-it('does not offer dragging for an image with no local URI', async () => {
-  await render({ ...image, fileUri: undefined });
-  expect(sources()).toHaveLength(0);
-  expect(root.root.findAllByType(Image)).toHaveLength(0);
-});
+it.each([true, false])(
+  'does not offer dragging without a local URI (remote=%s)',
+  async (remote) => {
+    await render({ ...image, fileUri: undefined }, remote);
+    expect(sources()).toHaveLength(0);
+    expect(root.root.findAllByType(Image)).toHaveLength(0);
+  }
+);
 
-it('does not offer dragging for network images', async () => {
-  await render({ ...image, fileUri: 'https://example.test/image.png' });
+it.each([true, false])('does not offer dragging for network images (remote=%s)', async (remote) => {
+  await render({ ...image, fileUri: 'https://example.test/image.png' }, remote);
   await loadImage();
   expect(sources()).toHaveLength(0);
 });
 
-it('removes the source if the displayed image fails to load', async () => {
-  const error = jest.spyOn(console, 'error').mockImplementation(() => {});
-  await render(image);
-  await loadImage();
-  await act(async () => root.root.findByType(Image).props.onError({ nativeEvent: {} }));
-  expect(sources()).toHaveLength(0);
-  error.mockRestore();
-});
+it.each([true, false])(
+  'removes the source if the displayed image fails to load (remote=%s)',
+  async (remote) => {
+    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await render(image, remote);
+    await loadImage();
+    await act(async () => root.root.findByType(Image).props.onError({ nativeEvent: {} }));
+    expect(sources()).toHaveLength(0);
+    error.mockRestore();
+  }
+);

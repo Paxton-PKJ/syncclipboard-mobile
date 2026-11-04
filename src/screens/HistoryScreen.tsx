@@ -20,7 +20,7 @@ import {
 } from 'react-native';
 import { Check, RefreshCw, List } from 'react-native-feather';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { FlashList, FlashListRef } from '@shopify/flash-list';
+import { FlashListRef } from '@shopify/flash-list';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
@@ -61,6 +61,7 @@ import { getReadyHistorySyncService } from '@/services/history/historySyncReadin
 import { getHistoryTransferQueue } from '@/services/history/HistoryTransferQueue';
 import { getProfileId } from '@/utils/clipboard/profileId';
 import { File } from 'expo-file-system';
+import { HistoryGestureList } from './history/HistoryGestureList';
 
 export function HistoryScreen() {
   const navigation = useNavigation();
@@ -103,6 +104,8 @@ export function HistoryScreen() {
   const [searchText, setSearchText] = useState('');
   const [tabIndex, setTabIndex] = useState(0);
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [isRangeSelecting, setIsRangeSelecting] = useState(false);
+  const enterMultiSelect = useCallback(() => setIsMultiSelectMode(true), []);
   const [sortField, setSortField] = useState<'timestamp' | 'lastAccessed'>('timestamp');
   const { message, showMessage, clearMessage } = useMessageStore();
   const { setError } = useErrorStore();
@@ -982,6 +985,33 @@ export function HistoryScreen() {
     return result;
   }, [sortedItems]);
 
+  // 选择集合变化不作废原生会话；内容、分类、搜索及排序变化才取消。
+  const gestureScopeKey = useMemo(
+    () =>
+      JSON.stringify([
+        searchText,
+        sortField,
+        tabIndex,
+        showFullImage,
+        layout.width,
+        items.map((item) => [
+          item.profileHash,
+          item.type,
+          item.version,
+          item.fileUri,
+          item.isDeleted,
+          item.hasData,
+          item.size,
+          item.text,
+          item.starred,
+          item.timestamp,
+          item.lastAccessed,
+          item.lastModified,
+        ]),
+      ]),
+    [searchText, sortField, tabIndex, showFullImage, layout.width, items]
+  );
+
   // 全选当前分类的项目
   const handleSelectAllInCurrentTab = useCallback(() => {
     const currentTabKey = tabRoutes[tabIndex]?.key;
@@ -1013,17 +1043,24 @@ export function HistoryScreen() {
     ({ route }: { route: Route }) => {
       const tabItems = filteredItemsByTab[route.key] || [];
       return (
-        <FlashList
-          ref={route.key === tabRoutes[tabIndex]?.key ? listRef : undefined}
-          data={tabItems}
-          renderItem={renderItem}
-          keyExtractor={(item) => item.profileHash}
-          onEndReached={handleEndReached}
-          onEndReachedThreshold={0.5}
-          ListEmptyComponent={renderEmptyComponent}
-          contentContainerStyle={styles.listContent}
-          refreshing={isRefreshing}
-          onRefresh={historySyncEnabled ? () => handleIncrementalSync(true) : undefined}
+        <HistoryGestureList
+          activeListRef={listRef}
+          active={route.key === tabRoutes[tabIndex]?.key}
+          scopeKey={gestureScopeKey}
+          multiSelect={isMultiSelectMode}
+          enterMultiSelect={enterMultiSelect}
+          onRangeActive={setIsRangeSelecting}
+          listProps={{
+            data: tabItems,
+            renderItem,
+            keyExtractor: (item) => item.profileHash,
+            onEndReached: handleEndReached,
+            onEndReachedThreshold: 0.5,
+            ListEmptyComponent: renderEmptyComponent,
+            contentContainerStyle: styles.listContent,
+            refreshing: isRefreshing,
+            onRefresh: historySyncEnabled ? () => handleIncrementalSync(true) : undefined,
+          }}
         />
       );
     },
@@ -1036,6 +1073,10 @@ export function HistoryScreen() {
       isRefreshing,
       historySyncEnabled,
       handleIncrementalSync,
+      gestureScopeKey,
+      isMultiSelectMode,
+      enterMultiSelect,
+      tabRoutes,
     ]
   );
 
@@ -1241,6 +1282,7 @@ export function HistoryScreen() {
         onIndexChange={setTabIndex}
         initialLayout={{ width: layout.width }}
         renderTabBar={renderTabBar}
+        swipeEnabled={!isRangeSelecting}
         lazy
       />
 

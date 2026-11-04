@@ -8,9 +8,15 @@ version = '1.0.0'
 
 android {
   namespace "expo.modules.nativeutil"
+  useLibrary 'android.test.runner'
+  useLibrary 'android.test.base'
+  useLibrary 'android.test.mock'
   defaultConfig {
     versionCode 1
     versionName "1.0.0"
+    testInstrumentationRunner "android.test.InstrumentationTestRunner"
+    // 内置旧 runner 的无过滤发现会遍历所有 RN/Expo Dex；只运行本模块的测试类。
+    testInstrumentationRunnerArguments class: 'expo.modules.nativeutil.HistoryDragPayloadTest'
   }
 }
 

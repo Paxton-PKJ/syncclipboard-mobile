@@ -107,6 +107,13 @@ const en: DeepString<typeof zh> = {
   },
 
   history: {
+    dragUnsupported: 'The selection contains files or groups. Select only images and text to drag.',
+    dragMissing: 'A selected item is no longer available. Update your selection and try again.',
+    dragNotReady:
+      'A selected image or full text file is unavailable or has changed. Download it again and retry.',
+    dragTooLarge:
+      'The complete text or selection is too large to drag. Select fewer items; text cannot be truncated.',
+    dragFailed: 'Could not drag the selection. Please try again.',
     loadFailed: 'Could not load history. Existing data has been preserved.',
     tabAll: 'All',
     tabText: 'Text',
