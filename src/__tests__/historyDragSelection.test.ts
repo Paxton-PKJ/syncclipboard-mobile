@@ -16,12 +16,14 @@ const item = (id: string, overrides = {}) =>
     ...overrides,
   });
 
-it('unions every crossed row and never removes selections on reversal', () => {
+it('recomputes the current range from the immutable gesture baseline on reversal', () => {
   const ids = ['a', 'b', 'c', 'd'];
-  const expanded = extendRangeSelection(new Set(['outside']), ids, 1, 3);
-  expect([...expanded]).toEqual(['outside', 'b', 'c', 'd']);
-  expect([...extendRangeSelection(expanded, ids, 1, 0)]).toEqual(['outside', 'b', 'c', 'd', 'a']);
-  expect([...extendRangeSelection(expanded, ids, -1, 2)]).toEqual([...expanded]);
+  const baseline = new Set(['outside', 'c']);
+  const expanded = extendRangeSelection(baseline, ids, 1, 3);
+  expect([...expanded]).toEqual(['outside', 'c', 'b', 'd']);
+  expect([...extendRangeSelection(baseline, ids, 1, 0)]).toEqual(['outside', 'c', 'a', 'b']);
+  expect([...extendRangeSelection(baseline, ids, -1, 2)]).toEqual([...baseline]);
+  expect([...baseline]).toEqual(['outside', 'c']);
 });
 
 it('maps all IDs in selection insertion order, including items outside the visible category', () => {

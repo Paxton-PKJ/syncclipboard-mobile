@@ -77,7 +77,12 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
   }, [props.active, props.activeListRef]);
 
   return (
-    <View ref={viewportRef} collapsable={false} style={styles.container}>
+    <View
+      ref={viewportRef}
+      collapsable={false}
+      style={styles.container}
+      onLayout={() => controller.onViewportChanged()}
+    >
       <HistoryGestureSurface
         ref={surfaceRef}
         style={styles.container}

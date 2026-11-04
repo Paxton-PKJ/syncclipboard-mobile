@@ -9,6 +9,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
+import java.security.MessageDigest
 
 internal class HistoryDragFailure(val code: String, val itemId: String? = null) : Exception(code)
 
@@ -101,7 +102,11 @@ internal class HistoryDragPayload(val clipData: ClipData, val snapshots: List<Im
             val source = sourceFile(item, id)
             val size = source.length()
             val modified = source.lastModified()
-            verifySize(source, (item["expectedSize"] as? Number)?.toLong(), id)
+            val expectedSize = (item["expectedSize"] as? Number)?.toLong()
+            val sizeMismatch = expectedSize != null && expectedSize > 0 && expectedSize != size
+            // 旧本地记录曾用 UTF-16 字符数保存大小；仅完整内容哈希可证明该误单位记录。
+            val legacySizeCandidate = sizeMismatch && expectedSize!! < size && id.matches(Regex("[0-9a-fA-F]{64}"))
+            if (sizeMismatch && !legacySizeCandidate) throw HistoryDragFailure("SOURCE_CHANGED", id)
             if (size > limit) throw HistoryDragFailure("PAYLOAD_TOO_LARGE", id)
             val output = ByteArrayOutputStream()
             source.inputStream().use { input ->
@@ -117,10 +122,18 @@ internal class HistoryDragPayload(val clipData: ClipData, val snapshots: List<Im
             if (source.length() != size || source.lastModified() != modified || output.size().toLong() != size) {
                 throw HistoryDragFailure("SOURCE_CHANGED", id)
             }
-            return try {
+            val bytes = output.toByteArray()
+            val text = try {
                 Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(output.toByteArray())).toString()
+                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
             } catch (error: Exception) { throw HistoryDragFailure("INVALID_TEXT", id) }
+            if (legacySizeCandidate) {
+                if (expectedSize != text.length.toLong()) throw HistoryDragFailure("SOURCE_CHANGED", id)
+                val hash = MessageDigest.getInstance("SHA-256").digest(bytes)
+                    .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+                if (!id.equals(hash, ignoreCase = true)) throw HistoryDragFailure("SOURCE_CHANGED", id)
+            }
+            return text
         }
     }
 }

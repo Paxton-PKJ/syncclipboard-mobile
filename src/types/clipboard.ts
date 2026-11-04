@@ -140,8 +140,11 @@ export interface ClipboardContent {
   /** 文件名 */
   fileName?: string;
 
-  /** 文件大小 */
+  /** 文件或完整文本内容大小（字节），有 fileUri 时必须与文件字节数一致 */
   fileSize?: number;
+
+  /** 已知完整文本的 UTF-16 代码单元数量（JavaScript string.length），不含预览省略号 */
+  textLength?: number;
 
   /** Profile hash（用于服务器上传，遵循服务器规则） */
   profileHash?: string;

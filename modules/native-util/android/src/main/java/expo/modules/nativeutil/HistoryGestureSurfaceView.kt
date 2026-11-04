@@ -115,7 +115,11 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
                 cancelGesture()
             }
         }
-        return super.dispatchTouchEvent(event)
+        // Still dispatch to children first so buttons and scroll containers keep their gestures.
+        // Static text may reject DOWN; retain that candidate's stream so UP/CANCEL can stop
+        // the delayed activation. Keep the pre-cleanup session for terminal-event handling.
+        val handled = super.dispatchTouchEvent(event)
+        return handled || (current != null && !current.started)
     }
 
     override fun onInterceptTouchEvent(event: MotionEvent) = session?.active == true || super.onInterceptTouchEvent(event)

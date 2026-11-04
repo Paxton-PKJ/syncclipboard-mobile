@@ -17,14 +17,14 @@ export class HistoryDragSelectionError extends Error {
   }
 }
 
-/** 只增选经过的连续范围，反向移动保留本轮和之前的选择。 */
+/** 以手势开始前的选择为基线重算当前范围，回拖撤销本轮范围外的新增项。 */
 export function extendRangeSelection(
-  selectedIds: ReadonlySet<string>,
+  baselineIds: ReadonlySet<string>,
   visibleIds: readonly string[],
   anchorIndex: number,
   targetIndex: number
 ): Set<string> {
-  const result = new Set(selectedIds);
+  const result = new Set(baselineIds);
   if (
     anchorIndex < 0 ||
     targetIndex < 0 ||
@@ -140,9 +140,14 @@ interface RangeSession {
   id: number;
   ids: readonly string[];
   anchor: number;
+  baselineIds: ReadonlySet<string>;
   pointer: { x: number; y: number };
   viewport?: HistoryViewport;
   lastFrame?: number;
+  direction?: number;
+  requestedOffset?: number;
+  lastCommandOffset?: number;
+  viewportRequest: number;
 }
 export interface HistoryDragSelectionDeps {
   getSnapshot(): { items: readonly HistoryItem[]; selectedIds: ReadonlySet<string> };
@@ -181,24 +186,28 @@ export class HistoryDragSelectionController {
         id: event.gestureId,
         ids,
         anchor,
+        baselineIds: new Set(this.deps.getSnapshot().selectedIds),
         pointer: { x: event.absoluteX, y: event.absoluteY },
+        viewportRequest: 0,
       };
       this.range = session;
       this.deps.enterMultiSelect();
-      this.deps.select(
-        extendRangeSelection(this.deps.getSnapshot().selectedIds, ids, anchor, anchor)
-      );
+      this.deps.select(extendRangeSelection(session.baselineIds, ids, anchor, anchor));
       this.deps.onRangeActive(true);
-      this.deps.measureViewport((viewport) => {
-        if (this.range !== session) return;
-        session.viewport = viewport;
-        this.hitTest();
-        this.scheduleFrame();
-      });
+      this.onViewportChanged();
     } else if (this.range?.id === event.gestureId) {
       if (event.phase === 'end' || event.phase === 'cancel') this.stopRange();
       else {
         this.range.pointer = { x: event.absoluteX, y: event.absoluteY };
+        const viewport = this.range.viewport;
+        if (
+          viewport &&
+          Math.sign(historyEdgeVelocity(event.absoluteY, viewport.y, viewport.height)) !==
+            this.range.direction
+        ) {
+          this.range.direction = undefined;
+          this.range.requestedOffset = undefined;
+        }
         this.hitTest();
       }
     }
@@ -219,17 +228,32 @@ export class HistoryDragSelectionController {
     );
     if (index === undefined) return;
     const selected = this.deps.getSnapshot().selectedIds;
-    const next = extendRangeSelection(selected, session.ids, session.anchor, index);
-    if (next.size !== selected.size) this.deps.select(next);
+    const next = extendRangeSelection(session.baselineIds, session.ids, session.anchor, index);
+    if (next.size !== selected.size || [...next].some((id) => !selected.has(id)))
+      this.deps.select(next);
+  }
+
+  /** 容器布局变化时重新测量窗口坐标；忽略旧会话或较早的异步测量。 */
+  onViewportChanged(): void {
+    const session = this.range;
+    if (!session) return;
+    const request = ++session.viewportRequest;
+    this.deps.measureViewport((viewport) => {
+      if (this.range !== session || request !== session.viewportRequest) return;
+      session.viewport = viewport;
+      this.hitTest();
+      this.scheduleFrame();
+    });
   }
 
   private scheduleFrame(): void {
-    if (!this.range || this.frame !== undefined) return;
+    const session = this.range;
+    if (!session || this.frame !== undefined) return;
     this.frame = this.deps.requestFrame((time) => {
+      if (this.range !== session) return;
       this.frame = undefined;
-      const session = this.range;
       const list = this.deps.getList();
-      if (!session?.viewport || !list) return;
+      if (!session.viewport || !list) return;
       const dt =
         session.lastFrame === undefined ? 0 : Math.max(0, Math.min(32, time - session.lastFrame));
       session.lastFrame = time;
@@ -245,9 +269,23 @@ export class HistoryDragSelectionController {
           session.viewport.height
       );
       const current = list.getAbsoluteLastScrollOffset();
-      const offset = Math.max(0, Math.min(maxOffset, current + (velocity * dt) / 1000));
-      if (velocity && offset !== current)
+      const direction = Math.sign(velocity);
+      if (direction !== session.direction || session.requestedOffset === undefined) {
+        session.direction = direction;
+        session.requestedOffset = current;
+      }
+      // 目标由本会话积分，滞后或重复的 onScroll 不得把下一帧目标拉回。
+      const base =
+        direction > 0
+          ? Math.max(session.requestedOffset, current)
+          : Math.min(session.requestedOffset, current);
+      const offset = Math.max(0, Math.min(maxOffset, base + (velocity * dt) / 1000));
+      session.requestedOffset = direction ? offset : undefined;
+      if (velocity && offset !== current && offset !== session.lastCommandOffset) {
         list.scrollToOffset({ offset, animated: false, skipFirstItemOffset: true });
+        session.lastCommandOffset = offset;
+      }
+      // 命令尚未被原生执行时，选区仍只能使用列表实际观测到的位置。
       this.hitTest();
       this.scheduleFrame();
     });

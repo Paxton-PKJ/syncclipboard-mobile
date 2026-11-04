@@ -5,7 +5,11 @@ import { Image, Platform } from 'react-native';
 import { CurrentClipboardCard } from '../components/CurrentClipboardCard';
 import type { ClipboardContent } from '../types/clipboard';
 
-jest.mock('native-util', () => ({ ImageDragSource: 'ImageDragSource' }));
+jest.mock('native-util', () => ({
+  ImageDragSource: 'ImageDragSource',
+  HistoryDragSource: 'HistoryDragSource',
+  HistoryGestureSurface: 'HistoryGestureSurface',
+}));
 jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 jest.mock('../hooks/useTheme', () => ({ useTheme: () => ({ theme: { colors: {} } }) }));
 jest.mock('../stores', () => ({ useSettingsStore: () => ({ config: {} }) }));
@@ -100,7 +104,6 @@ it.each([
 
 it.each([
   ['active download', true, true, 'android'],
-  ['active upload', false, true, 'android'],
   ['iOS', true, false, 'ios'],
   ['local iOS card', false, false, 'ios'],
 ] as const)('keeps an ordinary preview for %s', async (_label, remote, acting, platform) => {

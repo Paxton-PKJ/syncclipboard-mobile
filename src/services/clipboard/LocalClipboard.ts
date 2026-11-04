@@ -82,9 +82,10 @@ export class LocalClipboard {
   private async getTextContentFromString(text: string): Promise<ClipboardContent> {
     const profileHash = await measureStartup('local.textHash', () => calculateTextHash(text));
     const timestamp = Date.now();
+    const textBytes = new TextEncoder().encode(text);
 
     // 步骤1: 根据 profileHash 查询历史记录
-    let historyItem = await measureStartup('local.historyLookup', () =>
+    const historyItem = await measureStartup('local.historyLookup', () =>
       historyStorage.getItemByLocalHash(profileHash)
     );
 
@@ -101,7 +102,16 @@ export class LocalClipboard {
           const { File } = FileSystem;
           const historyFile = new File(historyFileUri);
 
-          if (historyFile.exists) {
+          let matchesFullText = false;
+          if (historyFile.exists && historyFile.size === textBytes.byteLength) {
+            try {
+              matchesFullText = (await historyFile.text()) === text;
+            } catch {
+              // 缓存不可读时使用当前完整文本重新创建临时文件。
+            }
+          }
+
+          if (matchesFullText) {
             // 生成预览文本：如果有历史文本则使用，否则从当前文本取前200字符
             let previewText = historyItem.text;
             if (!previewText) {
@@ -114,7 +124,8 @@ export class LocalClipboard {
               text: previewText,
               fileUri: historyFile.uri,
               fileName: historyItem.dataName,
-              fileSize: historyItem.size || text.length,
+              fileSize: textBytes.byteLength,
+              textLength: text.length,
               profileHash: historyItem.profileHash,
               localClipboardHash: historyItem.profileHash, // 文本类型，两者相同
               hasData: true,
@@ -127,7 +138,8 @@ export class LocalClipboard {
         return {
           type: 'Text',
           text: historyItem.text || text,
-          fileSize: historyItem.size || text.length,
+          fileSize: textBytes.byteLength,
+          textLength: text.length,
           profileHash: historyItem.profileHash,
           localClipboardHash: historyItem.profileHash,
           hasData: false,
@@ -148,10 +160,17 @@ export class LocalClipboard {
         const fileName = `${profileHash}.txt`;
         const tempFile = new FileSystem.File(prepareTempFilePath(fileName));
 
-        // 检查文件是否已存在
-        if (!tempFile.exists) {
-          // 文件不存在，保存完整文本到文件
-          tempFile.write(new TextEncoder().encode(text));
+        // 仅复用与当前完整文本一致的缓存，不能仅凭文件名或旧元数据判断。
+        let matchesFullText = false;
+        if (tempFile.exists && tempFile.size === textBytes.byteLength) {
+          try {
+            matchesFullText = (await tempFile.text()) === text;
+          } catch {
+            // 缓存不可读时覆盖为当前完整文本。
+          }
+        }
+        if (!matchesFullText) {
+          tempFile.write(textBytes);
           console.log(`[ClipboardManager] Text saved to file: ${fileName}, length: ${text.length}`);
         } else {
           // 文件已存在，直接使用
@@ -171,7 +190,8 @@ export class LocalClipboard {
           text: previewText, // 只保存预览文本在内存中
           fileUri: tempFile.uri, // 文件路径
           fileName: fileName,
-          fileSize: text.length,
+          fileSize: textBytes.byteLength,
+          textLength: text.length,
           profileHash,
           localClipboardHash: profileHash, // 文本类型，profileHash 和 localClipboardHash 相同
           hasData: true, // 标记有外部文件
@@ -187,7 +207,8 @@ export class LocalClipboard {
     return {
       type: 'Text',
       text,
-      fileSize: text.length, // 设置文字数量
+      fileSize: textBytes.byteLength,
+      textLength: text.length,
       profileHash,
       localClipboardHash: profileHash,
       hasData: false, // 短文本没有外部文件

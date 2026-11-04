@@ -218,7 +218,8 @@ it('keeps the initial hold in selection after React enters multi-select, then ac
   expect(f.surface.startDrag).not.toHaveBeenCalled();
   expect(f.selected()).toEqual(['0', '1', '2', '3']);
   f.event('move', 150);
-  expect(f.selected()).toEqual(['0', '1', '2', '3']);
+  expect(f.selected()).toEqual(['0']);
+  f.event('move', 270);
   f.event('end');
   await Promise.all([
     f.controller.drag({ gestureId: 2, sourceId: '2' }),
@@ -235,7 +236,7 @@ it('extends an existing selection from an unselected source without toggling pri
   f.select(['40', '1']);
   f.event('start', 250, '2');
   f.event('move', 150, '2');
-  expect(f.selected()).toEqual(['40', '1', '2', '0']);
+  expect(f.selected()).toEqual(['40', '1', '0', '2']);
 });
 
 it('continues selection on every edge-scroll frame with a stationary finger and caps dt to 32ms', () => {
@@ -258,6 +259,202 @@ it('recomputes actual layout hits after scroll even without a move event', () =>
   f.deps.getList()!.scrollToOffset({ offset: 500, animated: false, skipFirstItemOffset: true });
   f.controller.onScroll();
   expect(f.selected()).toContain('10');
+});
+
+/** Native observations deliberately do not synchronously follow scroll commands. */
+function delayedScrollFixture() {
+  const heights = [80, 170, 110, 240, 90, 360];
+  const ids = ['A', 'B', 'C', 'D', 'E', 'F'];
+  const layouts = heights.map((height, index) => ({
+    x: 0,
+    y: heights.slice(0, index).reduce((sum, value) => sum + value, 0),
+    width: 300,
+    height,
+  }));
+  const baseline = new Set(['hidden', 'E']);
+  let selectedIds = baseline;
+  let observed = 0;
+  let contentHeight = heights.reduce((sum, value) => sum + value, 0);
+  const viewport = { x: 0, y: 100, width: 300, height: 300 };
+  let frameId = 0;
+  const frames = new Map<number, (time: number) => void>();
+  const requests: number[] = [];
+  const controller = new HistoryDragSelectionController({
+    getSnapshot: () => ({ items: [], selectedIds }),
+    getVisibleIds: () => ids,
+    getList: () => ({
+      getLayout: (index) => layouts[index],
+      getFirstItemOffset: () => 0,
+      getAbsoluteLastScrollOffset: () => observed,
+      getChildContainerDimensions: () => ({ width: 300, height: contentHeight }),
+      scrollToOffset: ({ offset }) => requests.push(offset),
+    }),
+    getSurface: () => null,
+    measureViewport: (callback) => callback({ ...viewport }),
+    select: (next) => {
+      selectedIds = next;
+    },
+    enterMultiSelect: jest.fn(),
+    onRangeActive: jest.fn(),
+    onError: jest.fn(),
+    requestFrame: (callback) => {
+      frames.set(++frameId, callback);
+      return frameId;
+    },
+    cancelFrame: (id) => {
+      frames.delete(id);
+    },
+  });
+  return {
+    controller,
+    baseline,
+    viewport,
+    requests,
+    frames,
+    selected: () => [...selectedIds],
+    contentHeight: (height: number) => {
+      contentHeight = height;
+    },
+    event: (
+      phase: HistorySelectionGesture['phase'],
+      absoluteY = 399,
+      sourceId = 'A',
+      gestureId = 1
+    ) => controller.selection({ phase, absoluteY, absoluteX: 100, sourceId, gestureId }),
+    report: (offset: number) => {
+      observed = offset;
+      controller.onScroll();
+    },
+    frame: (time: number) => {
+      const callbacks = [...frames.values()];
+      frames.clear();
+      callbacks.forEach((callback) => callback(time));
+    },
+  };
+}
+
+it('keeps bottom-edge commands monotonic with variable heights, alternating dt and delayed duplicate/old native offsets', () => {
+  const f = delayedScrollFixture();
+  f.event('start');
+  [0, 16, 48, 64].forEach(f.frame);
+  f.report(f.requests[0]);
+  f.controller.onScroll();
+  [96, 112].forEach(f.frame);
+  f.report(f.requests[1]);
+  f.report(0);
+  [144, 160].forEach(f.frame);
+  expect(f.requests.length).toBeGreaterThan(2);
+  expect(f.requests.every((offset, index) => index === 0 || offset > f.requests[index - 1])).toBe(
+    true
+  );
+  // A command is not evidence that native has reached a future row.
+  expect(f.selected()).toEqual(['hidden', 'E', 'A', 'B', 'C']);
+  f.report(400);
+  expect(f.selected()).toEqual(['hidden', 'E', 'A', 'B', 'C', 'D', 'F']);
+});
+
+it('shrinks a reversed range, preserves a cloned baseline and replaces the range when crossing the anchor', () => {
+  const f = delayedScrollFixture();
+  f.event('start', 200, 'B');
+  f.baseline.add('mutated-after-start');
+  f.event('move', 399, 'B');
+  f.report(100);
+  expect(f.selected()).toEqual(['hidden', 'E', 'B', 'C', 'D']);
+  f.report(0);
+  f.event('move', 200, 'B');
+  expect(f.selected()).toEqual(['hidden', 'E', 'B']);
+  f.event('move', 120, 'B');
+  expect(f.selected()).toEqual(['hidden', 'E', 'A', 'B']);
+  f.event('move', 370, 'B');
+  expect(f.selected()).toEqual(['hidden', 'E', 'B', 'C']);
+});
+
+it('owns upward scroll targets despite old feedback and reverses direction from observed native position', () => {
+  const f = delayedScrollFixture();
+  f.report(400);
+  f.event('start', 101, 'D');
+  [0, 16, 48, 64].forEach(f.frame);
+  f.report(390);
+  [96, 112].forEach(f.frame);
+  expect(f.requests.every((offset, index) => index === 0 || offset < f.requests[index - 1])).toBe(
+    true
+  );
+  f.event('move', 399, 'D');
+  f.frame(128);
+  expect(f.requests.at(-1)).toBeGreaterThan(390);
+  f.report(380);
+  f.frame(160);
+  expect(f.requests.at(-1)).toBeGreaterThan(f.requests.at(-2)!);
+});
+
+it('clamps content boundaries, avoids duplicate requests, and restarts at native position after leaving the edge', () => {
+  const f = delayedScrollFixture();
+  f.event('start');
+  for (let time = 0; time <= 2000; time += 32) f.frame(time);
+  expect(f.requests.at(-1)).toBe(750);
+  expect(new Set(f.requests).size).toBe(f.requests.length);
+  f.contentHeight(500);
+  f.frame(2032);
+  expect(f.requests.at(-1)).toBe(200);
+  f.report(150);
+  f.event('move', 250);
+  f.frame(2064);
+  const count = f.requests.length;
+  f.frame(2096);
+  expect(f.requests).toHaveLength(count);
+  f.event('move', 399);
+  f.frame(2128);
+  expect(f.requests.at(-1)).toBeCloseTo(175.0666667);
+  f.event('move', 101);
+  for (let time = 2160; time <= 2480; time += 32) f.frame(time);
+  expect(f.requests.at(-1)).toBe(0);
+  expect(f.requests.every((offset) => offset >= 0 && offset <= 750)).toBe(true);
+});
+
+it('ignores a queued old RAF after UP, including after another range starts', () => {
+  const f = delayedScrollFixture();
+  f.event('start');
+  const oldFrame = [...f.frames.values()][0];
+  f.event('end');
+  oldFrame(16);
+  expect(f.requests).toEqual([]);
+  expect(f.frames.size).toBe(0);
+  f.event('start', 399, 'A', 2);
+  const nextFrames = [...f.frames.keys()];
+  oldFrame(32);
+  expect([...f.frames.keys()]).toEqual(nextFrames);
+  expect(f.requests).toEqual([]);
+});
+
+it('remeasures a resized viewport and clamps owned targets to its new content extent', () => {
+  const f = delayedScrollFixture();
+  f.event('start', 1000);
+  for (let time = 0; time <= 1000; time += 32) f.frame(time);
+  expect(f.requests.at(-1)).toBe(750);
+  f.viewport.height = 400;
+  f.controller.onViewportChanged();
+  f.frame(1032);
+  expect(f.requests.at(-1)).toBe(650);
+  f.frame(1064);
+  expect(f.requests.filter((offset) => offset === 650)).toHaveLength(1);
+  f.report(300);
+  f.contentHeight(200);
+  f.frame(1096);
+  expect(f.requests.at(-1)).toBe(0);
+});
+
+it('catches up to an observed position ahead of its target while continuing in the same direction', () => {
+  const f = delayedScrollFixture();
+  f.event('start');
+  [0, 16].forEach(f.frame);
+  f.report(200);
+  f.frame(48);
+  expect(f.requests.at(-1)).toBeGreaterThan(200);
+  f.event('move', 101);
+  f.frame(64);
+  f.report(100);
+  f.frame(96);
+  expect(f.requests.at(-1)).toBeLessThan(100);
 });
 
 it('ignores delayed viewport measurement after cancellation and stops all frames without clearing selection', () => {
