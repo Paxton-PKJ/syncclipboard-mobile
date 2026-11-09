@@ -69,6 +69,7 @@ import {
   downloadRemoteClipboard,
 } from '../services/sync/ClipboardSyncActions';
 import { localClipboard } from '../services/clipboard/LocalClipboard';
+import { profileDtoToContent } from '../utils/clipboard/convert';
 import { getClipboardChangedHandler } from '../services/sync/ClipboardChangedHandler';
 import * as startupClock from '../services/StartupTiming';
 
@@ -173,6 +174,39 @@ describe('ClipboardChangedHandler 启动基线窗口', () => {
 
     expect(copyToLocalClipboard).toHaveBeenCalledTimes(1);
     expect(copyToLocalClipboard).toHaveBeenCalledWith(next);
+  });
+
+  it.each([40000, undefined])(
+    '远端文本只有字符数（size=%s）时仍会自动下载完整文件',
+    async (size) => {
+      const remote = profileDtoToContent({
+        type: 'Text',
+        text: '预览'.repeat(5120),
+        hash: 'remote-text',
+        hasData: true,
+        dataName: 'remote.txt',
+        size,
+      });
+      const downloaded = { ...remote, fileUri: 'file:///remote.txt' };
+      jest.mocked(downloadRemoteClipboard).mockResolvedValue(downloaded);
+      await handler.processRemoteClipboardContent(remote);
+      expect(downloadRemoteClipboard).toHaveBeenCalledWith(remote);
+      expect(clipboardSyncState.setRemoteContent).toHaveBeenLastCalledWith(downloaded);
+    }
+  );
+
+  it('仍按字符大小限制拒绝超限文本的自动下载', async () => {
+    const remote = profileDtoToContent({
+      type: 'Text',
+      text: '预览',
+      hash: 'oversized-text',
+      hasData: true,
+      dataName: 'remote.txt',
+      size: 100,
+    });
+    jest.mocked(configService.getConfig).mockResolvedValue({ autoDownloadMaxSize: 10 } as never);
+    await handler.processRemoteClipboardContent(remote);
+    expect(downloadRemoteClipboard).not.toHaveBeenCalled();
   });
 });
 
