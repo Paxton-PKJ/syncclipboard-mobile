@@ -8,7 +8,6 @@ import type { ClipboardContent } from '../types/clipboard';
 jest.mock('native-util', () => {
   const React = jest.requireActual('react');
   return {
-    ImageDragSource: 'ImageDragSource',
     HistoryDragSource: 'HistoryDragSource',
     HistoryGestureSurface: React.forwardRef((props: object, ref: unknown) => {
       React.useImperativeHandle(ref, () => ({
@@ -92,8 +91,12 @@ async function render(content: ClipboardContent, remote = true, acting = false) 
 
 function sources() {
   return root.root
-    .findAllByType('ImageDragSource')
-    .filter((node: { props: { enabled?: boolean } }) => node.props.enabled);
+    .findAllByType('HistoryDragSource')
+    .filter(
+      (node: { props: { gestureMode?: string; accessibilityHint?: string } }) =>
+        node.props.gestureMode === 'drag' &&
+        node.props.accessibilityHint === 'clipboard.imageDragHint'
+    );
 }
 
 async function loadImage() {
@@ -104,7 +107,10 @@ it('keeps a loaded local image draggable while upload is active', async () => {
   await render(image, false, true);
   await loadImage();
   expect(sources()).toHaveLength(1);
-  expect(sources()[0].props.fileUri).toBe(image.fileUri);
+  await requestTextDrag();
+  expect(mockStartDrag).toHaveBeenCalledWith(7, [
+    { id: 'clipboard-image', kind: 'image', fileUri: image.fileUri, expectedSize: image.fileSize },
+  ]);
 });
 
 async function requestTextDrag() {
@@ -250,12 +256,23 @@ it.each(['change', 'unmount'] as const)(
 );
 
 it('invalidates image readiness when the clipboard changes and ignores an old failure', async () => {
+  let resolvePreparation: (result: { started: false; code: string }) => void = () => {};
+  mockStartDrag.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolvePreparation = resolve;
+      })
+  );
   await render(image, false);
   await loadImage();
-  const oldFailure = sources()[0].props.onDragStartFailed;
+  const surface = root.root.findByType('HistoryGestureSurface');
+  const epoch = surface.props.gestureEpoch;
+  await requestTextDrag();
   await act(async () => root.update(card({ ...image, fileUri: 'file:///cache/new.png' }, false)));
   expect(sources()).toHaveLength(0);
-  await act(async () => oldFailure());
+  expect(root.root.findByType('HistoryGestureSurface')).toBe(surface);
+  expect(surface.props.gestureEpoch).toBeGreaterThan(epoch);
+  await act(async () => resolvePreparation({ started: false, code: 'START_FAILED' }));
   expect(mockShowMessage).not.toHaveBeenCalled();
   await loadImage();
   expect(sources()).toHaveLength(1);

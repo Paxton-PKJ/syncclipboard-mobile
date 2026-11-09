@@ -19,6 +19,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import com.facebook.react.bridge.BridgeReactContext
 import expo.modules.kotlin.AppContext
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.ModulesProvider
 import expo.modules.kotlin.modules.Module
 import java.io.File
@@ -133,38 +134,45 @@ class HistoryDragPayloadTest {
         return file
     }
     @Test
-    fun testImagePreparationCancelledWithoutFailureAfterReleaseOrDetach() = onMain {
+    fun testSharedImagePreparationCancelsReleaseDetachAndReplacedSources() = onMain {
         val reactContext = BridgeReactContext(context)
         val appContext = AppContext(object : ModulesProvider {
             override fun getModulesMap(): Map<Class<out Module>, String?> = emptyMap()
         }, expo.modules.core.ModuleRegistry(emptyList(), emptyList()), WeakReference(reactContext))
         val source = image("cancelled-image.png", Bitmap.CompressFormat.PNG)
         val uri = Uri.fromFile(source).toString()
-        val view = ImageDragSourceView(context, appContext).apply { fileUri = uri }
-        var failures = 0
-        fun touch(action: Int) {
-            val event = MotionEvent.obtain(0, 0, action, 10f, 10f, 0)
-            try { view.onTouchEvent(event) } finally { event.recycle() }
+        val view = HistoryGestureSurfaceView(context, appContext)
+        val sessionField = HistoryGestureSurfaceView::class.java.getDeclaredField("session").apply { isAccessible = true }
+        var resolved: Any? = null
+        val promise = object : Promise {
+            override fun resolve(value: Any?) { resolved = value }
+            override fun reject(code: String, message: String?, cause: Throwable?) { fail("Unexpected rejection: $code") }
         }
-        for (terminal in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) {
-            touch(MotionEvent.ACTION_DOWN)
-            touch(terminal)
-            val snapshot = ImageDragFileStore.prepare(context, uri, source.length())
-            view.completePreparation(Result.success(snapshot), uri, available = true) { failures++ }
-            assertFalse("Cancelled preparation deletes its snapshot", snapshot.file.exists())
+        fun session() = HistoryGestureSession(7, "image", "drag").apply { activate(); beginPreparing() }
+        fun prepared() = HistoryDragPayload.prepare(context, listOf(item("image", "image", source))) { false }
+        fun assertCancelled(current: HistoryGestureSession, result: Result<HistoryDragPayload>) {
+            resolved = null
+            view.completePreparation(current, result, promise)
+            val outcome = resolved as Map<*, *>
+            assertEquals(false, outcome["started"])
+            assertEquals("CANCELLED", outcome["code"])
+            assertTrue("Cancelled preparation discards every snapshot", result.getOrNull()?.snapshots?.all { !it.file.exists() } ?: true)
         }
-        view.completePreparation(Result.failure(HistoryDragFailure("INVALID_IMAGE")), uri, available = true) { failures++ }
-        touch(MotionEvent.ACTION_DOWN)
-        val detached = ImageDragFileStore.prepare(context, uri, source.length())
-        view.completePreparation(Result.success(detached), uri, available = false) { failures++ }
-        assertFalse(detached.file.exists())
-        assertEquals("Release, detach and cancelled IO do not show a failure", 0, failures)
-        view.completePreparation(Result.failure(HistoryDragFailure("INVALID_IMAGE")), uri, available = true) { code ->
-            assertEquals("INVALID_IMAGE", code)
-            failures++
+        try {
+            val released = session().apply { cancel() }
+            sessionField.set(view, released)
+            assertCancelled(released, Result.success(prepared()))
+            assertCancelled(released, Result.failure(HistoryDragFailure("INVALID_IMAGE")))
+            val old = session()
+            sessionField.set(view, session())
+            assertCancelled(old, Result.success(prepared()))
+            val detached = session()
+            sessionField.set(view, detached)
+            assertCancelled(detached, Result.success(prepared()))
+        } finally {
+            view.cancelGesture()
+            source.delete()
         }
-        assertEquals("Real preparation failures still report an error", 1, failures)
-        touch(MotionEvent.ACTION_CANCEL)
     }
     private fun item(id: String, kind: String, file: File) = mapOf<String, Any?>(
         "id" to id, "kind" to kind, "fileUri" to Uri.fromFile(file).toString(), "expectedSize" to file.length()

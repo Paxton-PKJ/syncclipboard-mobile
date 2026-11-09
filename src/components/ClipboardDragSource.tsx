@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { Platform, View } from 'react-native';
+import { Platform, View, type ViewProps } from 'react-native';
 import {
   HistoryDragSource,
   HistoryGestureSurface,
@@ -10,21 +10,30 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useMessageStore } from '@/stores/messageStore';
 
-interface ClipboardTextDragSourceProps {
+interface ClipboardDragSourceProps extends ViewProps {
   item: HistoryDragItem | null;
+  contentType: 'Text' | 'Image';
   children: React.ReactNode;
 }
 
 let nextGestureEpoch = 0;
 
-/** 单项文本沿用原生拖拽会话；只包裹预览，保留卡片按钮和滚动行为。 */
-export function ClipboardTextDragSource({ item, children }: ClipboardTextDragSourceProps) {
+/** 首页图片和文本共用原生拖拽会话；仅包裹预览，保留卡片按钮和滚动行为。 */
+export function ClipboardDragSource({
+  item,
+  contentType,
+  children,
+  style,
+  ...viewProps
+}: ClipboardDragSourceProps) {
   const surfaceRef = useRef<HistoryGestureSurfaceHandle | null>(null);
   const currentItemRef = useRef(item);
   const gestureEpoch = useMemo(() => ++nextGestureEpoch, [item]);
   const mountedRef = useRef(true);
   const { t } = useTranslation();
   const { showMessage } = useMessageStore();
+  const failureKey =
+    contentType === 'Image' ? 'clipboard.imageDragFailed' : 'clipboard.textDragFailed';
   useLayoutEffect(() => {
     currentItemRef.current = item;
   }, [item]);
@@ -47,29 +56,41 @@ export function ClipboardTextDragSource({ item, children }: ClipboardTextDragSou
       if (!isCurrent() || !result || result.started || result.code === 'CANCELLED') return;
       showMessage(
         t(
-          result.code === 'PAYLOAD_TOO_LARGE'
+          contentType === 'Text' && result.code === 'PAYLOAD_TOO_LARGE'
             ? 'clipboard.textDragTooLarge'
-            : 'clipboard.textDragFailed'
+            : failureKey
         ),
         'error'
       );
     } catch {
-      if (isCurrent()) showMessage(t('clipboard.textDragFailed'), 'error');
+      if (isCurrent()) showMessage(t(failureKey), 'error');
     }
   };
 
-  if (Platform.OS !== 'android') return <View>{children}</View>;
+  if (Platform.OS !== 'android')
+    return (
+      <View style={style} {...viewProps}>
+        {children}
+      </View>
+    );
   return (
     <HistoryGestureSurface
       ref={surfaceRef}
+      style={style}
       gestureEpoch={gestureEpoch}
       enabled={!!item}
       onDragRequested={(event) => void handleDragRequested(event.nativeEvent)}
     >
       <HistoryDragSource
-        sourceId={item?.id ?? 'clipboard-text'}
+        {...viewProps}
+        style={style}
+        sourceId={item?.id ?? `clipboard-${contentType.toLowerCase()}`}
         gestureMode={item ? 'drag' : 'disabled'}
-        accessibilityHint={item ? t('clipboard.textDragHint') : undefined}
+        accessibilityHint={
+          item
+            ? t(contentType === 'Image' ? 'clipboard.imageDragHint' : 'clipboard.textDragHint')
+            : undefined
+        }
       >
         {children}
       </HistoryDragSource>

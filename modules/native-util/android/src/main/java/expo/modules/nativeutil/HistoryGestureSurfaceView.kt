@@ -147,32 +147,38 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
         // Expo decoded this invocation into an independent value tree; IO runs only once per session.
         dragPreparationExecutor.execute {
             val prepared = runCatching { HistoryDragPayload.prepare(context, items) { current.cancelled } }
-            handler.post {
-                val batch = prepared.getOrNull()
-                if (current.cancelled || session !== current || !isAttachedToWindow) {
-                    batch?.discard(); promise.resolve(failed("CANCELLED"))
-                } else if (batch == null) {
-                    val error = prepared.exceptionOrNull()
-                    promise.resolve(if (error is HistoryDragFailure) failed(error.code, error.itemId) else failed("START_FAILED"))
-                    cancelGesture()
-                } else {
-                    payload = batch
-                    // Set before the synchronous DRAG_STARTED dispatch so the source accepts the end event.
-                    current.started = true
-                    val started = runCatching {
-                        val marker = sourceMarker?.get()?.takeIf { it.sourceId == current.sourceId }
-                        startDragAndDrop(batch.clipData, BatchShadow(marker, batch.clipData.itemCount), null,
-                            View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
-                    }.getOrDefault(false)
-                    if (started) {
-                        finishTouch()
-                        promise.resolve(mapOf("started" to true))
-                    } else {
-                        current.started = false; payload = null; batch.discard()
-                        promise.resolve(failed("START_FAILED")); cancelGesture()
-                    }
-                }
-            }
+            handler.post { completePreparation(current, prepared, promise) }
+        }
+    }
+
+    /** 所有图片与文本共用主线程完成路径；松手、卸载和来源变更优先按取消处理。 */
+    internal fun completePreparation(current: HistoryGestureSession, prepared: Result<HistoryDragPayload>, promise: Promise) {
+        val batch = prepared.getOrNull()
+        if (current.cancelled || session !== current || !isAttachedToWindow) {
+            batch?.discard()
+            promise.resolve(failed("CANCELLED"))
+            return
+        }
+        if (batch == null) {
+            val error = prepared.exceptionOrNull()
+            promise.resolve(if (error is HistoryDragFailure) failed(error.code, error.itemId) else failed("START_FAILED"))
+            cancelGesture()
+            return
+        }
+        payload = batch
+        // Set before the synchronous DRAG_STARTED dispatch so the source accepts the end event.
+        current.started = true
+        val started = runCatching {
+            val marker = sourceMarker?.get()?.takeIf { it.sourceId == current.sourceId }
+            startDragAndDrop(batch.clipData, BatchShadow(marker, batch.clipData.itemCount), null,
+                View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
+        }.getOrDefault(false)
+        if (started) {
+            finishTouch()
+            promise.resolve(mapOf("started" to true))
+        } else {
+            current.started = false; payload = null; batch.discard()
+            promise.resolve(failed("START_FAILED")); cancelGesture()
         }
     }
 
