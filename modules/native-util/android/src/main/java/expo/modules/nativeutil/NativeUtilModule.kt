@@ -94,15 +94,6 @@ class NativeUtilModule : Module() {
         OnCreate { cleanupDragCache() }
         OnActivityEntersBackground { cleanupDragCache() }
 
-        View(ImageDragSourceView::class) {
-            Events("onDragStartFailed")
-            Prop("fileUri") { view: ImageDragSourceView, uri: String -> view.fileUri = uri }
-            Prop("enabled") { view: ImageDragSourceView, enabled: Boolean -> view.dragEnabled = enabled }
-            Prop("expectedSize") { view: ImageDragSourceView, size: Double? ->
-                view.expectedSize = size?.takeIf { it.isFinite() && it > 0 }?.toLong()
-            }
-        }
-
         View(HistoryGestureSurfaceView::class) {
             Events("onSelectionGesture", "onDragRequested", "onDragEnded")
             Prop("gestureEpoch") { view: HistoryGestureSurfaceView, epoch: Int -> view.gestureEpoch = epoch }

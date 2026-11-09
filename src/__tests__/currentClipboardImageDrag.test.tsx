@@ -5,11 +5,19 @@ import { Image, Platform } from 'react-native';
 import { CurrentClipboardCard } from '../components/CurrentClipboardCard';
 import type { ClipboardContent } from '../types/clipboard';
 
-jest.mock('native-util', () => ({
-  ImageDragSource: 'ImageDragSource',
-  HistoryDragSource: 'HistoryDragSource',
-  HistoryGestureSurface: 'HistoryGestureSurface',
-}));
+jest.mock('native-util', () => {
+  const React = jest.requireActual('react');
+  return {
+    HistoryDragSource: 'HistoryDragSource',
+    HistoryGestureSurface: React.forwardRef((props: object, ref: unknown) => {
+      React.useImperativeHandle(ref, () => ({
+        startDrag: mockStartDrag,
+        cancelGesture: mockCancelGesture,
+      }));
+      return React.createElement('HistoryGestureSurface', props);
+    }),
+  };
+});
 jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 jest.mock('../hooks/useTheme', () => ({ useTheme: () => ({ theme: { colors: {} } }) }));
 jest.mock('../stores', () => ({ useSettingsStore: () => ({ config: {} }) }));
@@ -31,6 +39,8 @@ jest.mock('react-native/Libraries/Components/Touchable/TouchableOpacity', () => 
 }));
 
 const mockShowMessage = jest.fn();
+const mockStartDrag = jest.fn();
+const mockCancelGesture = jest.fn();
 const image: ClipboardContent = {
   type: 'Image',
   text: '',
@@ -47,6 +57,8 @@ let root: ReturnType<typeof TestRenderer.create>;
 beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
+  mockStartDrag.mockResolvedValue({ started: true });
+  mockCancelGesture.mockResolvedValue(undefined);
   previousPlatform = Platform.OS;
   Platform.OS = 'android';
   previousAct = testGlobal.IS_REACT_ACT_ENVIRONMENT;
@@ -75,8 +87,22 @@ async function render(content: ClipboardContent, remote = true, acting = false) 
 
 function sources() {
   return root.root
-    .findAllByType('ImageDragSource')
-    .filter((node: { props: { enabled?: boolean } }) => node.props.enabled);
+    .findAllByType('HistoryDragSource')
+    .filter(
+      (node: { props: { gestureMode?: string; accessibilityHint?: string } }) =>
+        node.props.gestureMode === 'drag' &&
+        node.props.accessibilityHint === 'clipboard.imageDragHint'
+    );
+}
+
+async function requestImageDrag() {
+  const surface = root.root.findByType('HistoryGestureSurface');
+  const source = root.root.findByType('HistoryDragSource');
+  await act(async () =>
+    surface.props.onDragRequested({
+      nativeEvent: { gestureId: 7, sourceId: source.props.sourceId },
+    })
+  );
 }
 
 async function loadImage() {
@@ -91,20 +117,38 @@ it.each([
   async (_label, remote) => {
     await render(image, remote);
     expect(sources()).toHaveLength(0);
+    const surface = root.root.findByType('HistoryGestureSurface');
+    expect(surface.props.enabled).toBe(false);
     const preview = root.root.findByType(Image);
     await loadImage();
     expect(root.root.findByType(Image)).toBe(preview);
+    expect(root.root.findByType('HistoryGestureSurface')).toBe(surface);
+    expect(surface.props.enabled).toBe(true);
     expect(sources()).toHaveLength(1);
     expect(sources()[0].props).toMatchObject({
-      fileUri: image.fileUri,
-      expectedSize: 1000,
+      accessibilityLabel: image.fileName,
       accessibilityHint: 'clipboard.imageDragHint',
     });
     expect(mockShowMessage).not.toHaveBeenCalled();
-    await act(async () => sources()[0].props.onDragStartFailed());
+    await requestImageDrag();
+    expect(mockStartDrag).toHaveBeenCalledWith(7, [
+      { id: 'clipboard-image', kind: 'image', fileUri: image.fileUri, expectedSize: 1000 },
+    ]);
+    mockStartDrag.mockResolvedValue({ started: false, code: 'START_FAILED' });
+    await requestImageDrag();
     expect(mockShowMessage).toHaveBeenCalledWith('clipboard.imageDragFailed', 'error');
   }
 );
+
+it('silently handles a released image drag and cancels pending work on unmount', async () => {
+  await render(image);
+  await loadImage();
+  mockStartDrag.mockResolvedValue({ started: false, code: 'CANCELLED' });
+  await requestImageDrag();
+  expect(mockShowMessage).not.toHaveBeenCalled();
+  await act(async () => root.unmount());
+  expect(mockCancelGesture).toHaveBeenCalledTimes(1);
+});
 
 it.each([
   ['active download', true, true, 'android'],

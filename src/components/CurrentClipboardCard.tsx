@@ -23,9 +23,9 @@ import { openFile, shareFile, saveToGallery } from '@/utils/fileActions';
 import { formatFileSize, formatSizeWithType, isTextInvalid } from '@/utils';
 import { saveContentDataToDirectory } from '@/utils/clipboard/clipboardContentUtils';
 import * as FileSystem from 'expo-file-system/legacy';
-import { ImageDragSource, type HistoryDragItem, type ProgressInfo } from 'native-util';
+import { type HistoryDragItem, type ProgressInfo } from 'native-util';
 import { ClipboardTypeIcon } from './ClipboardTypeIcon';
-import { ClipboardTextDragSource } from './ClipboardTextDragSource';
+import { ClipboardDragSource } from './ClipboardDragSource';
 
 // 原生文件拖拽要求无 authority 的绝对 file URI，支持 file:/ 和 file:///。
 const isLocalDragFileUri = (uri?: string): uri is string =>
@@ -88,6 +88,31 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     };
   }, []);
   const remoteDragBlocked = isRemote && acting;
+  const imageDragItem = useMemo<HistoryDragItem | null>(() => {
+    if (
+      Platform.OS !== 'android' ||
+      clipboard?.type !== 'Image' ||
+      remoteDragBlocked ||
+      !isLocalDragFileUri(clipboard.fileUri) ||
+      loadedImageIdentity !== imageIdentity
+    )
+      return null;
+    return {
+      id: clipboard.profileHash || clipboard.localClipboardHash || 'clipboard-image',
+      kind: 'image',
+      fileUri: clipboard.fileUri,
+      expectedSize: clipboard.fileSize,
+    };
+  }, [
+    clipboard?.type,
+    clipboard?.fileUri,
+    clipboard?.fileSize,
+    clipboard?.profileHash,
+    clipboard?.localClipboardHash,
+    loadedImageIdentity,
+    imageIdentity,
+    remoteDragBlocked,
+  ]);
   const textDragItem = useMemo<HistoryDragItem | null>(() => {
     if (clipboard?.type !== 'Text' || remoteDragBlocked) return null;
     const id = clipboard.profileHash || clipboard.localClipboardHash || 'clipboard-text';
@@ -358,12 +383,7 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     }
   };
 
-  const canDragImage =
-    Platform.OS === 'android' &&
-    !remoteDragBlocked &&
-    clipboard.type === 'Image' &&
-    isLocalDragFileUri(clipboard.fileUri) &&
-    loadedImageIdentity === imageIdentity;
+  const canDragImage = !!imageDragItem;
   const imagePreview = clipboard.fileUri ? (
     <Image
       key={imageIdentity}
@@ -428,7 +448,7 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
       {/* 内容预览 */}
       <View style={styles.content}>
         {clipboard.type === 'Text' && (
-          <ClipboardTextDragSource item={textDragItem}>
+          <ClipboardDragSource item={textDragItem} contentType="Text">
             <Text
               style={[styles.previewText, { color: theme.colors.text }]}
               numberOfLines={isLongText ? 8 : undefined}
@@ -436,30 +456,22 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
             >
               {previewText}
             </Text>
-          </ClipboardTextDragSource>
+          </ClipboardDragSource>
         )}
 
         {clipboard.type === 'Image' && (
           <View style={styles.mediaPreview}>
             {clipboard.fileUri ? (
               <>
-                <ImageDragSource
-                  key={imageIdentity}
-                  fileUri={clipboard.fileUri}
-                  expectedSize={clipboard.fileSize}
-                  enabled={canDragImage}
+                <ClipboardDragSource
+                  item={imageDragItem}
+                  contentType="Image"
                   style={styles.imagePreview}
                   accessible
                   accessibilityLabel={clipboard.fileName || t('clipboard.imageFileLabel')}
-                  accessibilityHint={canDragImage ? t('clipboard.imageDragHint') : undefined}
-                  onDragStartFailed={() => {
-                    if (mountedRef.current && currentImageIdentityRef.current === imageIdentity) {
-                      showMessage(t('clipboard.imageDragFailed'), 'error');
-                    }
-                  }}
                 >
                   {imagePreview}
-                </ImageDragSource>
+                </ClipboardDragSource>
                 {canDragImage && (
                   <Text style={[styles.dragHint, { color: theme.colors.textSecondary }]}>
                     {t('clipboard.imageDragHint')}
