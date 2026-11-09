@@ -47,7 +47,7 @@ it('passes a complete text file reference and never sends its preview as text', 
       [item('a', { hasData: true, text: 'preview', fileUri: 'file:///full.txt', size: 5000 })],
       new Set(['a'])
     )
-  ).toEqual([{ id: 'a', kind: 'textFile', fileUri: 'file:///full.txt', expectedSize: 5000 }]);
+  ).toEqual([{ id: 'a', kind: 'textFile', fileUri: 'file:///full.txt' }]);
 });
 
 it.each([
@@ -86,4 +86,20 @@ it('ramps edge scrolling linearly inside 48 dp and caps velocity at 800 dp/s', (
   expect(historyEdgeVelocity(248, 200, 400)).toBe(0);
   expect(historyEdgeVelocity(576, 200, 400)).toBe(400);
   expect(historyEdgeVelocity(900, 200, 400)).toBe(800);
+});
+
+it('finds a hit near the end of a large ordered list in logarithmic layout queries', () => {
+  const getLayout = jest.fn((index: number) => ({ x: 0, y: index * 50, width: 300, height: 50 }));
+  expect(
+    findHistoryDragIndex(
+      100,
+      25,
+      { x: 0, y: 0, width: 300, height: 200 },
+      499950,
+      0,
+      10000,
+      getLayout
+    )
+  ).toBe(9999);
+  expect(getLayout.mock.calls.length).toBeLessThan(20);
 });

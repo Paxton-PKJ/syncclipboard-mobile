@@ -1,11 +1,13 @@
 import React from 'react';
-import { Platform, View, type ViewProps } from 'react-native';
+import { Platform, View, type NativeSyntheticEvent, type ViewProps } from 'react-native';
+import type { HistoryDragErrorCode } from './HistoryGestureSurface';
 import { requireNativeViewManager } from 'expo-modules-core';
 
 export interface ImageDragSourceProps extends ViewProps {
   fileUri: string;
   expectedSize?: number;
-  onDragStartFailed?: () => void;
+  enabled?: boolean;
+  onDragStartFailed?: (event: NativeSyntheticEvent<{ code: HistoryDragErrorCode }>) => void;
 }
 
 const NativeImageDragSource =
@@ -17,6 +19,7 @@ const NativeImageDragSource =
 export function ImageDragSource({
   fileUri,
   expectedSize,
+  enabled = true,
   onDragStartFailed,
   ...props
 }: ImageDragSourceProps) {
@@ -26,6 +29,7 @@ export function ImageDragSource({
       {...props}
       fileUri={fileUri}
       expectedSize={expectedSize}
+      enabled={enabled}
       onDragStartFailed={onDragStartFailed}
     />
   );

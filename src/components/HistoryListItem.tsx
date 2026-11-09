@@ -26,6 +26,7 @@ import { getProfileId, formatSizeWithType, formatFileSize } from '@/utils';
 import { useSettingsStore } from '@/stores';
 import { useTranslation } from 'react-i18next';
 import { HistoryDragSource, type ProgressInfo } from 'native-util';
+import NetInfo from '@react-native-community/netinfo';
 
 const ACTION_ICON_SIZE = 15;
 
@@ -107,7 +108,7 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
         autoDownloadTriggered.current = true;
 
         try {
-          const netInfo = await (await import('@react-native-community/netinfo')).default.fetch();
+          const netInfo = await NetInfo.fetch();
           const isWifiNow = netInfo.type === 'wifi';
           if (imageAutoDownload === 'wifi' && !isWifiNow) return;
 
@@ -209,6 +210,10 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
     const content = (
       <Pressable
         onLongPress={Platform.OS === 'android' ? undefined : () => onLongPress(item)}
+        accessibilityActions={Platform.OS === 'android' ? [{ name: 'longpress' }] : undefined}
+        onAccessibilityAction={(event) => {
+          if (event.nativeEvent.actionName === 'longpress') onLongPress(item);
+        }}
         onPress={isMultiSelectMode ? () => onPress?.(item) : undefined}
         style={({ pressed }) => [
           styles.touchable,
@@ -309,7 +314,7 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
 
             {/* 底部信息区 */}
             <View style={styles.bottomContent}>
-              <View style={styles.metaInfo}>
+              <HistoryDragSource sourceId="" gestureMode="disabled" style={styles.metaInfo}>
                 {item.size !== undefined && (
                   <Text style={[styles.metaText, { color: theme.colors.textTertiary }]}>
                     {formatSizeWithType(item.size, item.type)}
@@ -432,8 +437,8 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
                     </Text>
                   </TouchableOpacity>
                 )}
-              </View>
-              <View style={styles.actionsRow}>
+              </HistoryDragSource>
+              <HistoryDragSource sourceId="" gestureMode="disabled" style={styles.actionsRow}>
                 {/* 收藏按钮 */}
                 {onToggleStar && (
                   <TouchableOpacity
@@ -610,7 +615,7 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
                     )}
                   </>
                 )}
-              </View>
+              </HistoryDragSource>
             </View>
 
             {/* 调试信息：profileHash */}

@@ -74,7 +74,9 @@ async function render(content: ClipboardContent, remote = true, acting = false) 
 }
 
 function sources() {
-  return root.root.findAllByType('ImageDragSource');
+  return root.root
+    .findAllByType('ImageDragSource')
+    .filter((node: { props: { enabled?: boolean } }) => node.props.enabled);
 }
 
 async function loadImage() {
@@ -89,7 +91,9 @@ it.each([
   async (_label, remote) => {
     await render(image, remote);
     expect(sources()).toHaveLength(0);
+    const preview = root.root.findByType(Image);
     await loadImage();
+    expect(root.root.findByType(Image)).toBe(preview);
     expect(sources()).toHaveLength(1);
     expect(sources()[0].props).toMatchObject({
       fileUri: image.fileUri,
@@ -134,7 +138,7 @@ it.each([true, false])('does not offer dragging for network images (remote=%s)',
 });
 
 it.each([true, false])(
-  'removes the source if the displayed image fails to load (remote=%s)',
+  'disables the source if the displayed image fails to load (remote=%s)',
   async (remote) => {
     const error = jest.spyOn(console, 'error').mockImplementation(() => {});
     await render(image, remote);

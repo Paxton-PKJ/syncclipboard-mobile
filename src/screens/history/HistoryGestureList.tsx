@@ -29,11 +29,13 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
   const surfaceRef = useRef<HistoryGestureSurfaceHandle>(null);
   const [rangeActive, setRangeActive] = useState(false);
   const [gestureEpoch, setGestureEpoch] = useState(0);
+  const previousVisibleIds = useRef<readonly string[] | null>(null);
   const controllerRef = useRef<HistoryDragSelectionController | null>(null);
   if (!controllerRef.current) {
     controllerRef.current = new HistoryDragSelectionController({
       getSnapshot: () => useHistoryStore.getState(),
       getVisibleIds: () => (latest.current.listProps.data ?? []).map((item) => item.profileHash),
+      isMultiSelect: () => latest.current.multiSelect,
       getList: () => listRef.current,
       getSurface: () => surfaceRef.current,
       // 原生坐标相对手势容器，视口取容器自身尺寸，避免小窗下屏幕/窗口坐标偏移。
@@ -63,6 +65,17 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
   useLayoutEffect(() => {
     cancel();
   }, [cancel, props.scopeKey, props.active]);
+  useLayoutEffect(() => {
+    const ids = (props.listProps.data ?? []).map((item) => item.profileHash);
+    const previous = previousVisibleIds.current;
+    // 收藏分类的成员变化也会改变命中范围，普通分类仅更新收藏图标时保持会话。
+    if (
+      previous &&
+      (ids.length !== previous.length || ids.some((id, index) => id !== previous[index]))
+    )
+      cancel();
+    previousVisibleIds.current = ids;
+  }, [cancel, props.listProps.data]);
   useLayoutEffect(() => {
     if (!props.multiSelect) cancel();
   }, [cancel, props.multiSelect]);
@@ -99,7 +112,10 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
           {...props.listProps}
           ref={listRef}
           scrollEnabled={!rangeActive}
-          maintainVisibleContentPosition={{ disabled: true }}
+          maintainVisibleContentPosition={{
+            ...props.listProps.maintainVisibleContentPosition,
+            disabled: rangeActive,
+          }}
           onScroll={(event) => {
             controller.onScroll();
             props.listProps.onScroll?.(event);

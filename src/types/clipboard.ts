@@ -38,7 +38,7 @@ export interface HistoryItem {
   /** 数据文件名 */
   dataName?: string;
 
-  /** 文件大小（字节） */
+  /** 文本为完整字符数（string.length），其他类型为文件字节数 */
   size?: number;
 
   /** 创建时间戳 */
@@ -140,7 +140,7 @@ export interface ClipboardContent {
   /** 文件名 */
   fileName?: string;
 
-  /** 文件或完整文本内容大小（字节），有 fileUri 时必须与文件字节数一致 */
+  /** hasData 时的文件大小（字节），不用于文本字符数 */
   fileSize?: number;
 
   /** 已知完整文本的 UTF-16 代码单元数量（JavaScript string.length），不含预览省略号 */

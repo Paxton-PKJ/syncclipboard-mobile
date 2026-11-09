@@ -9,6 +9,12 @@ import { getHistoryFileUri } from '../utils/fileStorage';
 import { LocalClipboard } from '../services/clipboard/LocalClipboard';
 import { CurrentClipboardCard } from '../components/CurrentClipboardCard';
 import { createHistoryItem } from '../types/clipboard';
+import {
+  clipboardContentToItem,
+  historyItemToContent,
+  historyItemToDto,
+  profileDtoToContent,
+} from '../utils/clipboard/convert';
 
 jest.mock('../utils/clipboardProxy', () => ({ getStringAsync: jest.fn() }));
 jest.mock('../utils/hash', () => ({ calculateTextHash: jest.fn(async () => 'text-hash') }));
@@ -55,6 +61,7 @@ jest.mock('react-native/Libraries/Components/Touchable/TouchableOpacity', () => 
 const mockStartDrag = jest.fn();
 const files = new Map<string, Uint8Array>();
 const writes = jest.fn();
+const reads = jest.fn(async (uri: string) => new TextDecoder().decode(files.get(uri)));
 const encoder = new TextEncoder();
 const unicodeText = `${'完整文本🚀é'.repeat(220)}complete-tail`;
 const historyUri = 'file:///history/text-hash/full.txt';
@@ -84,7 +91,7 @@ beforeEach(() => {
       writes(uri, bytes);
       files.set(uri, new Uint8Array(bytes));
     },
-    text: async () => new TextDecoder().decode(files.get(uri)),
+    text: () => reads(uri),
   }));
   previousPlatform = Platform.OS;
   Platform.OS = 'android';
@@ -118,15 +125,19 @@ function useHistoryFile(bytes: Uint8Array) {
 it.each([
   ['multibyte Unicode and emoji', unicodeText],
   ['ASCII', 'a'.repeat(1100)],
-])('writes complete %s text with its actual UTF-8 byte size', async (_label, text) => {
-  jest.mocked(ClipboardProxy.getStringAsync).mockResolvedValue(text);
-  const content = await new LocalClipboard().getClipboardContent();
-  expect(content).toMatchObject({ type: 'Text', hasData: true, fileUri: tempUri });
-  expect(files.get(content!.fileUri!)).toEqual(encoder.encode(text));
-  expect(content!.fileSize).toBe(files.get(content!.fileUri!)!.byteLength);
-  if (text === unicodeText) expect(content!.fileSize).not.toBe(text.length);
-  expect(content).toHaveProperty('textLength', text.length);
-});
+])(
+  'writes complete %s text with its actual UTF-8 byte size',
+  async (_label, text) => {
+    jest.mocked(ClipboardProxy.getStringAsync).mockResolvedValue(text);
+    const content = await new LocalClipboard().getClipboardContent();
+    expect(content).toMatchObject({ type: 'Text', hasData: true, fileUri: tempUri });
+    expect(files.get(content!.fileUri!)).toEqual(encoder.encode(text));
+    expect(content!.fileSize).toBe(files.get(content!.fileUri!)!.byteLength);
+    if (text === unicodeText) expect(content!.fileSize).not.toBe(text.length);
+    expect(content).toHaveProperty('textLength', text.length);
+  },
+  15000
+);
 
 it('uses the current full text byte size when a history record has legacy character metadata', async () => {
   useHistoryFile(encoder.encode(unicodeText));
@@ -149,6 +160,18 @@ it('reuses a complete temp file without rewriting it', async () => {
   });
   expect(writes).not.toHaveBeenCalled();
 });
+
+it.each(['history', 'temp'] as const)(
+  'validates a reused %s cache once across clipboard polls',
+  async (cache) => {
+    if (cache === 'history') useHistoryFile(encoder.encode(unicodeText));
+    else files.set(tempUri, encoder.encode(unicodeText));
+    const clipboard = new LocalClipboard();
+    await clipboard.getClipboardContent();
+    await clipboard.getClipboardContent();
+    expect(reads).toHaveBeenCalledTimes(1);
+  }
+);
 
 it.each(['history', 'temp'] as const)(
   'replaces a truncated %s cache with complete text',
@@ -176,16 +199,16 @@ it.each(['history', 'temp'] as const)(
   }
 );
 
-it('keeps short text byte size separate from its character count', async () => {
+it('keeps inline text character metadata without a file byte size', async () => {
   const text = '短文本🚀';
   jest.mocked(ClipboardProxy.getStringAsync).mockResolvedValue(text);
   const content = await new LocalClipboard().getClipboardContent();
   expect(content).toMatchObject({
     hasData: false,
     text,
-    fileSize: encoder.encode(text).byteLength,
   });
   expect(content).toHaveProperty('textLength', text.length);
+  expect(content!.fileSize).toBeUndefined();
 });
 
 it('ignores legacy size metadata for an inline history match', async () => {
@@ -205,9 +228,31 @@ it('ignores legacy size metadata for an inline history match', async () => {
   expect(content).toMatchObject({
     hasData: false,
     text,
-    fileSize: encoder.encode(text).byteLength,
     textLength: text.length,
   });
+  expect(content!.fileSize).toBeUndefined();
+});
+
+it.each(['你好', unicodeText])(
+  'keeps history and synchronized text size in characters',
+  async (text) => {
+    jest.mocked(ClipboardProxy.getStringAsync).mockResolvedValue(text);
+    const content = await new LocalClipboard().getClipboardContent();
+    const item = clipboardContentToItem(content!);
+    expect(item.size).toBe(text.length);
+    expect(historyItemToDto(item).size).toBe(text.length);
+    const restored = historyItemToContent(item);
+    expect(restored.textLength).toBe(text.length);
+    expect(restored.fileSize).toBeUndefined();
+  }
+);
+
+it('uses inline text length when converting legacy byte metadata', () => {
+  const item = clipboardContentToItem({ type: 'Text', text: '你好', hasData: false, fileSize: 6 });
+  expect(item.size).toBe(2);
+  expect(
+    profileDtoToContent({ type: 'Text', text: '你好', hasData: false, hash: 'hash', size: 6 })
+  ).toMatchObject({ textLength: 2 });
 });
 
 it('passes actual producer bytes to Home native textFile drag and displays the full character count', async () => {

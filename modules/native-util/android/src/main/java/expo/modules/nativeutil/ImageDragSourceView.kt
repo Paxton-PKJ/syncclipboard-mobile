@@ -13,7 +13,6 @@ import android.view.View
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
-import java.util.concurrent.Executors
 
 /** 原生负责长按，普通滑动仍由父 ScrollView 拦截；拖拽开始后由系统接管。 */
 class ImageDragSourceView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
@@ -32,6 +31,8 @@ class ImageDragSourceView(context: Context, appContext: AppContext) : ExpoView(c
 
     var fileUri: String = ""
     var expectedSize: Long? = null
+    var dragEnabled: Boolean = true
+        set(value) { field = value; if (!value) touching = false }
     private val onDragStartFailed by EventDispatcher()
     private var touching = false
     private var preparing = false
@@ -58,9 +59,10 @@ class ImageDragSourceView(context: Context, appContext: AppContext) : ExpoView(c
     }
 
     // 图片子视图不接管触摸，使长按计时可靠；不阻止父级拦截滚动手势。
-    override fun onInterceptTouchEvent(event: MotionEvent) = true
+    override fun onInterceptTouchEvent(event: MotionEvent) = dragEnabled
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!dragEnabled) return super.onTouchEvent(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> touching = true
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> touching = false
@@ -77,50 +79,57 @@ class ImageDragSourceView(context: Context, appContext: AppContext) : ExpoView(c
         super.onDetachedFromWindow()
     }
 
-    private fun fail() {
+    private fun fail(code: String) {
         parent?.requestDisallowInterceptTouchEvent(false)
-        onDragStartFailed(emptyMap<String, Any>())
+        onDragStartFailed(mapOf("code" to code))
     }
 
     private fun beginDrag() {
-        if (preparing || snapshot != null) return
+        if (!dragEnabled || !touching || !isAttachedToWindow || preparing || snapshot != null) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || !isAttachedToWindow ||
             width <= 0 || height <= 0 || appContext.currentActivity == null) {
-            fail()
+            fail("UNAVAILABLE")
             return
         }
         preparing = true
         val source = fileUri
         val size = expectedSize
         parent?.requestDisallowInterceptTouchEvent(true)
-        executor.execute {
+        dragPreparationExecutor.execute {
             val result = runCatching { ImageDragFileStore.prepare(context, source, size) }
-            mainHandler.post {
-                preparing = false
-                val prepared = result.getOrNull()
-                if (prepared == null) {
-                    fail()
-                } else if (!touching || !isAttachedToWindow || fileUri != source || appContext.currentActivity == null) {
-                    ImageDragFileStore.discard(prepared)
-                    fail()
-                } else {
-                    snapshot = prepared
-                    val data = ClipData(ClipDescription("Image", arrayOf(prepared.mimeType)), ClipData.Item(prepared.uri))
-                    val started = runCatching {
-                        startDragAndDrop(data, View.DragShadowBuilder(this), null,
-                            View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
-                    }.getOrDefault(false)
-                    if (!started) {
-                        snapshot = null
-                        ImageDragFileStore.discard(prepared)
-                        fail()
-                    }
-                }
-            }
+            mainHandler.post { completePreparation(result, source) }
         }
     }
 
-    companion object {
-        private val executor = Executors.newSingleThreadExecutor()
+    internal fun completePreparation(
+        result: Result<ImageDragFileStore.Snapshot>,
+        source: String,
+        available: Boolean = isAttachedToWindow && appContext.currentActivity != null,
+        onFailure: (String) -> Unit = ::fail
+    ) {
+        preparing = false
+        val prepared = result.getOrNull()
+        // 用户松手、页面卸载或来源更新都是取消；即使 IO 同时失败，也不提示错误。
+        if (!dragEnabled || !touching || !available || fileUri != source) {
+            prepared?.let(ImageDragFileStore::discard)
+            parent?.requestDisallowInterceptTouchEvent(false)
+            return
+        }
+        if (prepared == null) {
+            onFailure((result.exceptionOrNull() as? HistoryDragFailure)?.code ?: "START_FAILED")
+            return
+        }
+        snapshot = prepared
+        val data = ClipData(ClipDescription("Image", arrayOf(prepared.mimeType)), ClipData.Item(prepared.uri))
+        val started = runCatching {
+            startDragAndDrop(data, View.DragShadowBuilder(this), null,
+                View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
+        }.getOrDefault(false)
+        if (!started) {
+            snapshot = null
+            ImageDragFileStore.discard(prepared)
+            onFailure("START_FAILED")
+        }
     }
+
 }

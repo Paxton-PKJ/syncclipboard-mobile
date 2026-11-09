@@ -59,7 +59,8 @@ export function buildHistoryDragItems(
       id,
       kind: item.type === 'Image' ? 'image' : 'textFile',
       fileUri: item.fileUri,
-      expectedSize: item.size,
+      // 历史文本 size 是字符数；原生直接验证文件读取期间的字节数和修改时间。
+      ...(item.type === 'Image' ? { expectedSize: item.size } : {}),
     };
   });
 }
@@ -104,9 +105,15 @@ export function findHistoryDragIndex(
     viewport.y +
     absoluteOffset -
     firstItemOffset;
-  for (let index = 0; index < count; index++) {
+  let low = 0;
+  let high = count - 1;
+  while (low <= high) {
+    const index = Math.floor((low + high) / 2);
     const layout = getLayout(index);
-    if (layout && contentY >= layout.y && contentY < layout.y + layout.height) return index;
+    if (!layout) return undefined;
+    if (contentY < layout.y) high = index - 1;
+    else if (contentY >= layout.y + layout.height) low = index + 1;
+    else return index;
   }
   return undefined;
 }
@@ -152,6 +159,7 @@ interface RangeSession {
 export interface HistoryDragSelectionDeps {
   getSnapshot(): { items: readonly HistoryItem[]; selectedIds: ReadonlySet<string> };
   getVisibleIds(): readonly string[];
+  isMultiSelect(): boolean;
   getList(): HistorySelectionList | null;
   getSurface(): HistoryGestureSurfaceHandle | null;
   measureViewport(callback: (viewport: HistoryViewport) => void): void;
@@ -168,14 +176,15 @@ export class HistoryDragSelectionController {
   private range?: RangeSession;
   private frame?: number;
   private generation = 0;
-  private requested = new Set<number>();
+  private lastRequestedId?: number;
 
   constructor(private deps: HistoryDragSelectionDeps) {}
 
   selection(event: HistorySelectionGesture): void {
     if (event.phase === 'start') {
+      if (this.lastRequestedId !== undefined && event.gestureId <= this.lastRequestedId) return;
       this.stopRange();
-      this.requested.add(event.gestureId);
+      this.lastRequestedId = event.gestureId;
       const ids = [...this.deps.getVisibleIds()];
       const anchor = ids.indexOf(event.sourceId);
       if (anchor < 0) {
@@ -186,7 +195,9 @@ export class HistoryDragSelectionController {
         id: event.gestureId,
         ids,
         anchor,
-        baselineIds: new Set(this.deps.getSnapshot().selectedIds),
+        baselineIds: this.deps.isMultiSelect()
+          ? new Set(this.deps.getSnapshot().selectedIds)
+          : new Set(),
         pointer: { x: event.x, y: event.y },
         viewportRequest: 0,
       };
@@ -313,8 +324,12 @@ export class HistoryDragSelectionController {
   }
 
   async drag(event: HistoryDragRequest): Promise<void> {
-    if (this.range || this.requested.has(event.gestureId)) return;
-    this.requested.add(event.gestureId);
+    if (
+      this.range ||
+      (this.lastRequestedId !== undefined && event.gestureId <= this.lastRequestedId)
+    )
+      return;
+    this.lastRequestedId = event.gestureId;
     const generation = this.generation;
     try {
       const snapshot = this.deps.getSnapshot();

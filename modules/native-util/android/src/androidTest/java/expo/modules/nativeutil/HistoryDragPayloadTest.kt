@@ -9,7 +9,11 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import android.test.AndroidTestCase
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assert.*
+import org.junit.Test
+import org.junit.runner.RunWith
 import android.view.MotionEvent
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -24,7 +28,9 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** 使用设备真实 Parcel、图片探测和 FileProvider 验证整组数据。 */
-class HistoryDragPayloadTest : AndroidTestCase() {
+@RunWith(AndroidJUnit4::class)
+class HistoryDragPayloadTest {
+    private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private fun onMain(block: () -> Unit) {
         val finished = CountDownLatch(1)
         var failure: Throwable? = null
@@ -36,6 +42,7 @@ class HistoryDragPayloadTest : AndroidTestCase() {
     }
 
     /** 实际父子 dispatch：静态文本不消费 DOWN，Surface 必须持有后续 UP/CANCEL。 */
+    @Test
     fun testPendingStaticTextOwnsTouchUntilUpOrParentCancel() = onMain {
         val reactContext = BridgeReactContext(context)
         val appContext = AppContext(object : ModulesProvider {
@@ -125,6 +132,40 @@ class HistoryDragPayloadTest : AndroidTestCase() {
         bitmap.recycle()
         return file
     }
+    @Test
+    fun testImagePreparationCancelledWithoutFailureAfterReleaseOrDetach() = onMain {
+        val reactContext = BridgeReactContext(context)
+        val appContext = AppContext(object : ModulesProvider {
+            override fun getModulesMap(): Map<Class<out Module>, String?> = emptyMap()
+        }, expo.modules.core.ModuleRegistry(emptyList(), emptyList()), WeakReference(reactContext))
+        val source = image("cancelled-image.png", Bitmap.CompressFormat.PNG)
+        val uri = Uri.fromFile(source).toString()
+        val view = ImageDragSourceView(context, appContext).apply { fileUri = uri }
+        var failures = 0
+        fun touch(action: Int) {
+            val event = MotionEvent.obtain(0, 0, action, 10f, 10f, 0)
+            try { view.onTouchEvent(event) } finally { event.recycle() }
+        }
+        for (terminal in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) {
+            touch(MotionEvent.ACTION_DOWN)
+            touch(terminal)
+            val snapshot = ImageDragFileStore.prepare(context, uri, source.length())
+            view.completePreparation(Result.success(snapshot), uri, available = true) { failures++ }
+            assertFalse("Cancelled preparation deletes its snapshot", snapshot.file.exists())
+        }
+        view.completePreparation(Result.failure(HistoryDragFailure("INVALID_IMAGE")), uri, available = true) { failures++ }
+        touch(MotionEvent.ACTION_DOWN)
+        val detached = ImageDragFileStore.prepare(context, uri, source.length())
+        view.completePreparation(Result.success(detached), uri, available = false) { failures++ }
+        assertFalse(detached.file.exists())
+        assertEquals("Release, detach and cancelled IO do not show a failure", 0, failures)
+        view.completePreparation(Result.failure(HistoryDragFailure("INVALID_IMAGE")), uri, available = true) { code ->
+            assertEquals("INVALID_IMAGE", code)
+            failures++
+        }
+        assertEquals("Real preparation failures still report an error", 1, failures)
+        touch(MotionEvent.ACTION_CANCEL)
+    }
     private fun item(id: String, kind: String, file: File) = mapOf<String, Any?>(
         "id" to id, "kind" to kind, "fileUri" to Uri.fromFile(file).toString(), "expectedSize" to file.length()
     )
@@ -134,6 +175,7 @@ class HistoryDragPayloadTest : AndroidTestCase() {
             fail("Expected $code")
         } catch (error: HistoryDragFailure) { assertEquals(code, error.code) }
     }
+    @Test
     fun testMixedOrderFullUnicodeAndReadableUris() {
         val png = image("batch.png", Bitmap.CompressFormat.PNG)
         val jpg = image("batch.jpg", Bitmap.CompressFormat.JPEG)
@@ -158,6 +200,7 @@ class HistoryDragPayloadTest : AndroidTestCase() {
             assertTrue(payload.snapshots.all { it.file.exists() })
         } finally { payload.discard() }
     }
+    @Test
     fun testFailureAndCancellationDiscardEntireGroup() {
         val png = image("valid.png", Bitmap.CompressFormat.PNG)
         val bad = File(context.cacheDir, "bad.png").apply { writeText("not an image") }
@@ -172,13 +215,13 @@ class HistoryDragPayloadTest : AndroidTestCase() {
         val invalid = File(context.cacheDir, "invalid.txt").apply { writeBytes(byteArrayOf(0xc3.toByte(), 0x28)) }
         failure("INVALID_TEXT", listOf(item("invalid", "textFile", invalid)))
     }
+    @Test
     fun testLimitsNeverTruncate() {
-        val boundary = "界".repeat(43690) + "ab"
+        val boundary = "界".repeat(60000) + "ab"
         val payload = HistoryDragPayload.prepare(context, listOf(mapOf("id" to "limit", "kind" to "text", "text" to boundary))) { false }
         assertEquals(boundary, payload.clipData.getItemAt(0).text.toString())
         payload.discard()
-        failure("PAYLOAD_TOO_LARGE", listOf(mapOf("id" to "limit", "kind" to "text", "text" to boundary + "c")))
-        val ascii = "a".repeat(HistoryDragPayload.MAX_TEXT_BYTES)
+        val ascii = "a".repeat(131072)
         val asciiPayload = HistoryDragPayload.prepare(context, listOf(mapOf("id" to "ascii", "kind" to "text", "text" to ascii))) { false }
         assertEquals(ascii, asciiPayload.clipData.getItemAt(0).text.toString())
         val asciiParcel = Parcel.obtain()
@@ -191,14 +234,16 @@ class HistoryDragPayloadTest : AndroidTestCase() {
         failure("PAYLOAD_TOO_LARGE", listOf(mapOf("id" to "parcel", "kind" to "text", "text" to "a".repeat(131072))) +
             List(20000) { mapOf("id" to "empty-$it", "kind" to "text", "text" to "") })
     }
+    @Test
     fun testUtf8AndParcelLimits() {
-        failure("PAYLOAD_TOO_LARGE", listOf(mapOf("id" to "large", "kind" to "text", "text" to "🙂".repeat(32769))))
-        val text = File(context.cacheDir, "large.txt").apply { writeText("a".repeat(131073)) }
+        failure("PAYLOAD_TOO_LARGE", listOf(mapOf("id" to "large", "kind" to "text", "text" to "🙂".repeat(131073))))
+        val text = File(context.cacheDir, "large.txt").apply { writeText("a".repeat(HistoryDragPayload.MAX_PARCEL_BYTES + 1)) }
         failure("PAYLOAD_TOO_LARGE", listOf(item("file", "textFile", text)))
         failure("PAYLOAD_TOO_LARGE", List(20000) { mapOf("id" to "$it", "kind" to "text", "text" to "") })
         failure("EMPTY_SELECTION", emptyList())
         failure("UNSUPPORTED_ITEM", listOf(mapOf("id" to "file", "kind" to "file")))
     }
+    @Test
     fun testExactParcelBoundaryAndChangedSource() {
         fun parcelSize(count: Int): Int {
             val parcel = Parcel.obtain()
@@ -226,6 +271,7 @@ class HistoryDragPayloadTest : AndroidTestCase() {
             false
         }
     }
+    @Test
     fun testSessionFreezesModeAndOnlyPreparesOnce() {
         val session = HistoryGestureSession(1, "origin", "select")
         assertEquals("select", session.mode)
@@ -243,6 +289,7 @@ class HistoryDragPayloadTest : AndroidTestCase() {
         assertFalse(started.cancelled)
     }
 
+    @Test
     fun testLegacyTextCharacterSizeRequiresCompleteContentHash() {
         val text = "旧记录中文🙂é\n".repeat(100) + "FULL_TEXT_TAIL"
         val bytes = text.toByteArray(Charsets.UTF_8)
@@ -289,7 +336,7 @@ class HistoryDragPayloadTest : AndroidTestCase() {
         val invalid = byteArrayOf(0xc3.toByte(), 0x28, 0x61)
         file.writeBytes(invalid)
         failure("INVALID_TEXT", listOf(legacy(hash(invalid), 1)))
-        val oversized = "界".repeat(43691)
+        val oversized = "界".repeat(HistoryDragPayload.MAX_PARCEL_BYTES + 1)
         val oversizedBytes = oversized.toByteArray(Charsets.UTF_8)
         file.writeBytes(oversizedBytes)
         failure("PAYLOAD_TOO_LARGE", listOf(legacy(hash(oversizedBytes), oversized.length.toLong())))

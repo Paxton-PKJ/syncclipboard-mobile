@@ -174,4 +174,23 @@ describe('historyStore handleStorageChange 排序', () => {
     // sort 应该还是 lastAccessed desc，c 移到首位
     expect(hashes(items)).toEqual(['c', 'a', 'b']);
   });
+
+  it('只在手势来源、可见顺序或筛选排序变化时增加版本', () => {
+    const a = createItem('a', 2);
+    const b = createItem('b', 1);
+    useHistoryStore.setState({ items: [a, b] });
+    const revision = useHistoryStore.getState().gestureRevision;
+    useHistoryStore.setState({
+      items: [{ ...a, text: 'updated', starred: true, lastAccessed: 99, version: 2 }, b],
+    });
+    expect(useHistoryStore.getState().gestureRevision).toBe(revision);
+    useHistoryStore.setState({ items: [b, a] });
+    expect(useHistoryStore.getState().gestureRevision).toBeGreaterThan(revision);
+    const reordered = useHistoryStore.getState().gestureRevision;
+    useHistoryStore.setState({ items: [b, { ...a, fileUri: 'file:///ready.txt' }] });
+    expect(useHistoryStore.getState().gestureRevision).toBeGreaterThan(reordered);
+    const ready = useHistoryStore.getState().gestureRevision;
+    useHistoryStore.getState().setSort({ field: 'lastAccessed', order: 'desc' });
+    expect(useHistoryStore.getState().gestureRevision).toBeGreaterThan(ready);
+  });
 });

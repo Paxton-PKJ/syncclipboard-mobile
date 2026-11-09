@@ -443,31 +443,30 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
         {clipboard.type === 'Image' && (
           <View style={styles.mediaPreview}>
             {clipboard.fileUri ? (
-              canDragImage ? (
-                <>
-                  <ImageDragSource
-                    key={imageIdentity}
-                    fileUri={clipboard.fileUri}
-                    expectedSize={clipboard.fileSize}
-                    style={styles.imagePreview}
-                    accessible
-                    accessibilityLabel={clipboard.fileName || t('clipboard.imageFileLabel')}
-                    accessibilityHint={t('clipboard.imageDragHint')}
-                    onDragStartFailed={() => {
-                      if (mountedRef.current && currentImageIdentityRef.current === imageIdentity) {
-                        showMessage(t('clipboard.imageDragFailed'), 'error');
-                      }
-                    }}
-                  >
-                    {imagePreview}
-                  </ImageDragSource>
+              <>
+                <ImageDragSource
+                  key={imageIdentity}
+                  fileUri={clipboard.fileUri}
+                  expectedSize={clipboard.fileSize}
+                  enabled={canDragImage}
+                  style={styles.imagePreview}
+                  accessible
+                  accessibilityLabel={clipboard.fileName || t('clipboard.imageFileLabel')}
+                  accessibilityHint={canDragImage ? t('clipboard.imageDragHint') : undefined}
+                  onDragStartFailed={() => {
+                    if (mountedRef.current && currentImageIdentityRef.current === imageIdentity) {
+                      showMessage(t('clipboard.imageDragFailed'), 'error');
+                    }
+                  }}
+                >
+                  {imagePreview}
+                </ImageDragSource>
+                {canDragImage && (
                   <Text style={[styles.dragHint, { color: theme.colors.textSecondary }]}>
                     {t('clipboard.imageDragHint')}
                   </Text>
-                </>
-              ) : (
-                imagePreview
-              )
+                )}
+              </>
             ) : (
               <View>
                 <Text style={[styles.mediaLabel, { color: theme.colors.textSecondary }]}>

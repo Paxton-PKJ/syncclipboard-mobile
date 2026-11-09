@@ -19,8 +19,9 @@ internal class HistoryDragPayload(val clipData: ClipData, val snapshots: List<Im
     fun release() = snapshots.forEach(ImageDragFileStore::release)
 
     companion object {
-        const val MAX_TEXT_BYTES = 131072
         const val MAX_PARCEL_BYTES = 262144
+        // UTF-8 和 UTF-16 的具体 Parcel 编码由系统决定，最终以实际序列化大小为准。
+        private const val MAX_TEXT_CHARS = MAX_PARCEL_BYTES
 
         fun prepare(context: Context, items: List<Map<String, Any?>>, isCancelled: () -> Boolean): HistoryDragPayload {
             val snapshots = mutableListOf<ImageDragFileStore.Snapshot>()
@@ -30,7 +31,7 @@ internal class HistoryDragPayload(val clipData: ClipData, val snapshots: List<Im
                 if (items.isEmpty()) throw HistoryDragFailure("EMPTY_SELECTION")
                 val clips = mutableListOf<ClipData.Item>()
                 val mimes = linkedSetOf<String>()
-                var textBytes = 0
+                var textChars = 0
                 items.forEach { item ->
                     checkCancelled()
                     val id = item["id"] as? String ?: throw HistoryDragFailure("ITEM_NOT_FOUND")
@@ -41,29 +42,19 @@ internal class HistoryDragPayload(val clipData: ClipData, val snapshots: List<Im
                         "image" -> {
                             val source = sourceFile(item, id)
                             verifySize(source, expectedSize, id)
-                            val snapshot = try {
-                                ImageDragFileStore.prepare(context, item["fileUri"] as String, expectedSize, isCancelled)
-                            } catch (error: HistoryDragFailure) { throw error }
-                            catch (error: Exception) {
-                                val code = if (error.message?.contains("changed") == true) "SOURCE_CHANGED" else "INVALID_IMAGE"
-                                throw HistoryDragFailure(code, id)
-                            }
+                            val snapshot = ImageDragFileStore.prepare(context, item["fileUri"] as String, expectedSize, isCancelled, id)
                             snapshots.add(snapshot)
                             clips.add(ClipData.Item(snapshot.uri))
                             mimes.add(snapshot.mimeType)
                         }
                         "text", "textFile" -> {
-                            val remaining = MAX_TEXT_BYTES - textBytes
+                            val remaining = MAX_TEXT_CHARS - textChars
                             val text = if (kind == "textFile") readText(item, id, remaining, isCancelled)
                             else item["text"] as? String ?: throw HistoryDragFailure("INVALID_TEXT", id)
-                            // A Char count above the limit cannot fit even in single-byte UTF-8.
+                            // 超过此字符数时，即使每字符只占一个字节也无法放入 Parcel。
                             if (text.length > remaining) throw HistoryDragFailure("PAYLOAD_TOO_LARGE", id)
-                            val bytes = try {
-                                Charsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
-                                    .onUnmappableCharacter(CodingErrorAction.REPORT).encode(java.nio.CharBuffer.wrap(text)).remaining()
-                            } catch (error: Exception) { throw HistoryDragFailure("INVALID_TEXT", id) }
-                            if (bytes > remaining) throw HistoryDragFailure("PAYLOAD_TOO_LARGE", id)
-                            textBytes += bytes
+                            if (!Charsets.UTF_8.newEncoder().canEncode(text)) throw HistoryDragFailure("INVALID_TEXT", id)
+                            textChars += text.length
                             clips.add(ClipData.Item(text))
                             mimes.add("text/plain")
                         }
@@ -107,15 +98,17 @@ internal class HistoryDragPayload(val clipData: ClipData, val snapshots: List<Im
             // 旧本地记录曾用 UTF-16 字符数保存大小；仅完整内容哈希可证明该误单位记录。
             val legacySizeCandidate = sizeMismatch && expectedSize!! < size && id.matches(Regex("[0-9a-fA-F]{64}"))
             if (sizeMismatch && !legacySizeCandidate) throw HistoryDragFailure("SOURCE_CHANGED", id)
-            if (size > limit) throw HistoryDragFailure("PAYLOAD_TOO_LARGE", id)
+            // 有效 UTF-8 每个 UTF-16 代码单元最多三个字节，仅读取有界的完整文件。
+            val byteLimit = limit * 3
+            if (size > byteLimit) throw HistoryDragFailure("PAYLOAD_TOO_LARGE", id)
             val output = ByteArrayOutputStream()
             source.inputStream().use { input ->
                 val buffer = ByteArray(8192)
                 while (true) {
                     if (isCancelled()) throw HistoryDragFailure("CANCELLED", id)
-                    val count = input.read(buffer, 0, minOf(buffer.size, limit - output.size() + 1))
+                    val count = input.read(buffer, 0, minOf(buffer.size, byteLimit - output.size() + 1))
                     if (count < 0) break
-                    if (output.size() + count > limit) throw HistoryDragFailure("PAYLOAD_TOO_LARGE", id)
+                    if (output.size() + count > byteLimit) throw HistoryDragFailure("PAYLOAD_TOO_LARGE", id)
                     output.write(buffer, 0, count)
                 }
             }

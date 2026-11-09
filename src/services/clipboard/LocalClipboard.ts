@@ -31,6 +31,36 @@ export interface CopyLifecycleCallbacks {
 export class LocalClipboard {
   private copyLifecycleCallbacks: CopyLifecycleCallbacks | null = null;
   private remoteCopiedCallback: ((content: ClipboardContent) => void) | null = null;
+  private verifiedTextFile?: { uri: string; hash: string; size: number; modified: number | null };
+
+  /** 哈希缓存首次复用时校验完整内容；后续轮询只检查文件元数据。 */
+  private async matchesTextFile(
+    file: FileSystem.File,
+    text: string,
+    hash: string,
+    bytes: number
+  ): Promise<boolean> {
+    if (!file.exists || file.size !== bytes) return false;
+    const previous = this.verifiedTextFile;
+    if (
+      previous?.uri === file.uri &&
+      previous.hash === hash &&
+      previous.size === bytes &&
+      previous.modified === file.modificationTime
+    )
+      return true;
+    try {
+      if ((await file.text()) !== text) return false;
+      this.rememberTextFile(file, hash, bytes);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private rememberTextFile(file: FileSystem.File, hash: string, size: number): void {
+    this.verifiedTextFile = { uri: file.uri, hash, size, modified: file.modificationTime };
+  }
 
   /**
    * 注册复制生命周期回调（由 ClipboardMonitor 调用）
@@ -98,14 +128,12 @@ export class LocalClipboard {
           const { File } = FileSystem;
           const historyFile = new File(historyFileUri);
 
-          let matchesFullText = false;
-          if (historyFile.exists && historyFile.size === textBytes.byteLength) {
-            try {
-              matchesFullText = (await historyFile.text()) === text;
-            } catch {
-              // 缓存不可读时使用当前完整文本重新创建临时文件。
-            }
-          }
+          const matchesFullText = await this.matchesTextFile(
+            historyFile,
+            text,
+            profileHash,
+            textBytes.byteLength
+          );
 
           if (matchesFullText) {
             // 生成预览文本：如果有历史文本则使用，否则从当前文本取前200字符
@@ -134,7 +162,6 @@ export class LocalClipboard {
         return {
           type: 'Text',
           text: historyItem.text || text,
-          fileSize: textBytes.byteLength,
           textLength: text.length,
           profileHash: historyItem.profileHash,
           localClipboardHash: historyItem.profileHash,
@@ -156,17 +183,15 @@ export class LocalClipboard {
         const fileName = `${profileHash}.txt`;
         const tempFile = new FileSystem.File(prepareTempFilePath(fileName));
 
-        // 仅复用与当前完整文本一致的缓存，不能仅凭文件名或旧元数据判断。
-        let matchesFullText = false;
-        if (tempFile.exists && tempFile.size === textBytes.byteLength) {
-          try {
-            matchesFullText = (await tempFile.text()) === text;
-          } catch {
-            // 缓存不可读时覆盖为当前完整文本。
-          }
-        }
+        const matchesFullText = await this.matchesTextFile(
+          tempFile,
+          text,
+          profileHash,
+          textBytes.byteLength
+        );
         if (!matchesFullText) {
           tempFile.write(textBytes);
+          this.rememberTextFile(tempFile, profileHash, textBytes.byteLength);
           console.log(`[ClipboardManager] Text saved to file: ${fileName}, length: ${text.length}`);
         } else {
           // 文件已存在，直接使用
@@ -203,7 +228,6 @@ export class LocalClipboard {
     return {
       type: 'Text',
       text,
-      fileSize: textBytes.byteLength,
       textLength: text.length,
       profileHash,
       localClipboardHash: profileHash,

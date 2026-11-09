@@ -62,6 +62,7 @@ import { getHistoryTransferQueue } from '@/services/history/HistoryTransferQueue
 import { getProfileId } from '@/utils/clipboard/profileId';
 import { File } from 'expo-file-system';
 import { HistoryGestureList } from './history/HistoryGestureList';
+import { localClipboard } from '@/services/clipboard/LocalClipboard';
 
 export function HistoryScreen() {
   const navigation = useNavigation();
@@ -80,6 +81,7 @@ export function HistoryScreen() {
   );
   const {
     items,
+    gestureRevision,
     isLoading,
     error: historyError,
     loadItems,
@@ -238,17 +240,11 @@ export function HistoryScreen() {
   // ClipboardItem 转换为 ClipboardContent 后调用公共复制函数
   const copyItemWithSync = useCallback(async (item: HistoryItem) => {
     const content: ClipboardContent = {
-      type: item.type,
-      text: item.text,
-      profileHash: item.profileHash,
-      fileUri: item.fileUri,
-      fileName: item.dataName,
-      fileSize: item.size,
+      ...historyItemToContent(item),
       timestamp: item.timestamp,
       localClipboardHash: item.localClipboardHash,
       hasData: item.hasData,
     };
-    const { localClipboard } = await import('@/services');
     await localClipboard.setClipboardContent(content);
     // 更新 lastAccessed，使按访问时间排序时记录移到顶部
     historyStorage.updateLastAccessed(item.profileHash);
@@ -985,31 +981,11 @@ export function HistoryScreen() {
     return result;
   }, [sortedItems]);
 
-  // 选择集合变化不作废原生会话；内容、分类、搜索及排序变化才取消。
+  // 来源变化由 store 版本追踪，避免在渲染时序列化所有历史文本。
   const gestureScopeKey = useMemo(
     () =>
-      JSON.stringify([
-        searchText,
-        sortField,
-        tabIndex,
-        showFullImage,
-        layout.width,
-        items.map((item) => [
-          item.profileHash,
-          item.type,
-          item.version,
-          item.fileUri,
-          item.isDeleted,
-          item.hasData,
-          item.size,
-          item.text,
-          item.starred,
-          item.timestamp,
-          item.lastAccessed,
-          item.lastModified,
-        ]),
-      ]),
-    [searchText, sortField, tabIndex, showFullImage, layout.width, items]
+      [gestureRevision, searchText, sortField, tabIndex, showFullImage, layout.width].join('\0'),
+    [gestureRevision, searchText, sortField, tabIndex, showFullImage, layout.width]
   );
 
   // 全选当前分类的项目
