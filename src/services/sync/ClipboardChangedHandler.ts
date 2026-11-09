@@ -118,7 +118,11 @@ class ClipboardChangedHandler {
     if (fileUri && !content.fileUri) {
       console.log('[ClipboardChangedHandler] Found existing file in history');
       content = { ...content, fileUri };
-    } else if (content.hasData && content.fileName && content.fileSize !== undefined) {
+    } else if (
+      content.hasData &&
+      content.fileName &&
+      (content.type === 'Text' || content.fileSize !== undefined)
+    ) {
       const downloadedContent = await this.tryAutoDownload(content, config);
       if (!downloadedContent) {
         return;
@@ -138,10 +142,12 @@ class ClipboardChangedHandler {
     config: AppConfig
   ): Promise<ClipboardContent | null> {
     const autoDownloadMaxSize = config?.autoDownloadMaxSize ?? 5 * 1024 * 1024;
+    const size =
+      content.type === 'Text' ? (content.textLength ?? content.text.length) : content.fileSize!;
 
-    if (content.fileSize! > autoDownloadMaxSize) {
+    if (size > autoDownloadMaxSize) {
       console.log(
-        `[ClipboardChangedHandler] File too large (${content.fileSize} > ${autoDownloadMaxSize}), skipping auto-download`
+        `[ClipboardChangedHandler] Content too large (${size} > ${autoDownloadMaxSize}), skipping auto-download`
       );
       return null;
     }

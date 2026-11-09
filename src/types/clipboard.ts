@@ -140,10 +140,10 @@ export interface ClipboardContent {
   /** 文件名 */
   fileName?: string;
 
-  /** hasData 时的文件大小（字节），不用于文本字符数 */
+  /** 文件字节数；文本仅在已知本地文件实际大小时设置，不承载服务端字符数 */
   fileSize?: number;
 
-  /** 已知完整文本的 UTF-16 代码单元数量（JavaScript string.length），不含预览省略号 */
+  /** 完整文本的 UTF-16 代码单元数量；服务端缺失大小时以预览长度兜底 */
   textLength?: number;
 
   /** Profile hash（用于服务器上传，遵循服务器规则） */

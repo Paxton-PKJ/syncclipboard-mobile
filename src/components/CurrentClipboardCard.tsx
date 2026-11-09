@@ -90,22 +90,21 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
   const remoteDragBlocked = isRemote && acting;
   const textDragItem = useMemo<HistoryDragItem | null>(() => {
     if (clipboard?.type !== 'Text' || remoteDragBlocked) return null;
+    const id = clipboard.profileHash || clipboard.localClipboardHash || 'clipboard-text';
     if (clipboard.hasData) {
       if (!isLocalDragFileUri(clipboard.fileUri)) return null;
       return {
-        id: 'clipboard-text',
+        id,
         kind: 'textFile',
         fileUri: clipboard.fileUri,
-        expectedSize: clipboard.fileSize,
       };
     }
     if (!clipboard.text) return null;
-    return { id: 'clipboard-text', kind: 'text', text: clipboard.text };
+    return { id, kind: 'text', text: clipboard.text };
   }, [
     clipboard?.type,
     clipboard?.hasData,
     clipboard?.fileUri,
-    clipboard?.fileSize,
     clipboard?.text,
     clipboard?.localClipboardHash,
     clipboard?.profileHash,

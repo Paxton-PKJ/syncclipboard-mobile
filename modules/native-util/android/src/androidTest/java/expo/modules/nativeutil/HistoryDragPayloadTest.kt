@@ -341,4 +341,23 @@ class HistoryDragPayloadTest {
         file.writeBytes(oversizedBytes)
         failure("PAYLOAD_TOO_LARGE", listOf(legacy(hash(oversizedBytes), oversized.length.toLong())))
     }
+
+    @Test
+    fun testTextFileWithoutSizeMetadataVerifiesTheCompleteUnicodeContentHash() {
+        val full = "远端中文🙂é\n".repeat(3000) + "COMPLETE_TAIL"
+        val bytes = full.toByteArray(Charsets.UTF_8)
+        val hash = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }.uppercase()
+        val file = File(context.cacheDir, "remote-hash-without-size.txt").apply { writeBytes(bytes) }
+        val item = mapOf<String, Any?>("id" to hash, "kind" to "textFile", "fileUri" to Uri.fromFile(file).toString())
+        try {
+            val payload = HistoryDragPayload.prepare(context, listOf(item)) { false }
+            try { assertEquals(full, payload.clipData.getItemAt(0).text.toString()) } finally { payload.discard() }
+            val modified = file.lastModified()
+            file.writeText(full.replaceFirst("远", "错"))
+            assertEquals(bytes.size.toLong(), file.length())
+            assertTrue(file.setLastModified(modified))
+            failure("SOURCE_CHANGED", listOf(item))
+        } finally { file.delete() }
+    }
 }

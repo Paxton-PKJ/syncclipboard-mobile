@@ -120,8 +120,9 @@ internal class HistoryDragPayload(val clipData: ClipData, val snapshots: List<Im
                 Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
             } catch (error: Exception) { throw HistoryDragFailure("INVALID_TEXT", id) }
-            if (legacySizeCandidate) {
-                if (expectedSize != text.length.toLong()) throw HistoryDragFailure("SOURCE_CHANGED", id)
+            if (legacySizeCandidate && expectedSize != text.length.toLong()) throw HistoryDragFailure("SOURCE_CHANGED", id)
+            // 首页和历史使用 TextProfile.Hash 校验完整内容，与是否提供字节元数据无关。
+            if (id.matches(Regex("[0-9a-fA-F]{64}"))) {
                 val hash = MessageDigest.getInstance("SHA-256").digest(bytes)
                     .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
                 if (!id.equals(hash, ignoreCase = true)) throw HistoryDragFailure("SOURCE_CHANGED", id)

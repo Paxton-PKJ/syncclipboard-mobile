@@ -11,15 +11,25 @@ import { CurrentClipboardCard } from '../components/CurrentClipboardCard';
 import { createHistoryItem } from '../types/clipboard';
 import {
   clipboardContentToItem,
+  contentToProfileDto,
   historyItemToContent,
   historyItemToDto,
   profileDtoToContent,
 } from '../utils/clipboard/convert';
+import { downloadForStorage } from '../services/client/StorageClient';
+import { historyService } from '../services/history/HistoryService';
+import { sha256 } from 'js-sha256';
 
 jest.mock('../utils/clipboardProxy', () => ({ getStringAsync: jest.fn() }));
 jest.mock('../utils/hash', () => ({ calculateTextHash: jest.fn(async () => 'text-hash') }));
 jest.mock('../storage/HistoryStorage', () => ({
   historyStorage: { getItemByLocalHash: jest.fn() },
+}));
+jest.mock('../services/history/HistoryService', () => ({
+  historyService: { getItem: jest.fn(), addItem: jest.fn() },
+}));
+jest.mock('../services/ClientFactory', () => ({
+  getAPIClient: jest.fn(async () => ({ downloadFile: mockDownloadFile })),
 }));
 jest.mock('../utils/fileStorage', () => ({
   getHistoryFileUri: jest.fn(),
@@ -59,6 +69,7 @@ jest.mock('react-native/Libraries/Components/Touchable/TouchableOpacity', () => 
 }));
 
 const mockStartDrag = jest.fn();
+const mockDownloadFile = jest.fn();
 const files = new Map<string, Uint8Array>();
 const writes = jest.fn();
 const reads = jest.fn(async (uri: string) => new TextDecoder().decode(files.get(uri)));
@@ -79,6 +90,9 @@ beforeEach(() => {
   jest.mocked(getHistoryFileUri).mockResolvedValue(historyUri);
   jest.mocked(ClipboardProxy.getStringAsync).mockResolvedValue(unicodeText);
   mockStartDrag.mockResolvedValue({ started: true });
+  jest.mocked(historyService.getItem).mockResolvedValue(null);
+  jest.mocked(historyService.addItem).mockImplementation(async (item) => item);
+  mockDownloadFile.mockImplementation(async (_name: string, uri: string) => uri);
   (File as unknown as jest.Mock).mockImplementation((uri: string) => ({
     uri,
     get exists() {
@@ -255,7 +269,113 @@ it('uses inline text length when converting legacy byte metadata', () => {
   ).toMatchObject({ textLength: 2 });
 });
 
-it('passes actual producer bytes to Home native textFile drag and displays the full character count', async () => {
+it('uploads local file-backed text with its full character count rather than file bytes or preview length', async () => {
+  const content = await new LocalClipboard().getClipboardContent();
+  const profile = await contentToProfileDto(content!);
+  expect(profile.size).toBe(unicodeText.length);
+  expect(profile.size).not.toBe(content!.fileSize);
+  expect(profile.size).not.toBe(content!.text.length);
+});
+
+it.each(['你好🚀', ''])(
+  'uploads inline text with its character count, including empty text',
+  async (text) => {
+    const profile = await contentToProfileDto({
+      type: 'Text',
+      text,
+      hasData: false,
+      profileHash: 'inline-hash',
+    });
+    expect(profile.size).toBe(text.length);
+    expect(profile.hasData).toBe(false);
+  }
+);
+
+it.each(['Image', 'File', 'Group'] as const)('keeps %s upload sizes in bytes', async (type) => {
+  const profile = await contentToProfileDto({
+    type,
+    text: 'data',
+    hasData: true,
+    fileUri: 'file:///data',
+    fileName: 'data',
+    profileHash: 'hash',
+    fileSize: 4096,
+  });
+  expect(profile.size).toBe(4096);
+});
+
+it.each([40000, 0, undefined])(
+  'preserves remote text character metadata (server size=%s) across history and upload conversion',
+  async (size) => {
+    const preview = '界'.repeat(10240);
+    const content = profileDtoToContent({
+      type: 'Text',
+      text: preview,
+      hash: 'remote-hash',
+      hasData: true,
+      dataName: 'remote.txt',
+      size,
+    });
+    const expected = size || preview.length;
+    expect(content.textLength).toBe(expected);
+    expect(content.fileSize).toBeUndefined();
+    const item = clipboardContentToItem(content);
+    expect(item.size).toBe(expected);
+    expect(historyItemToDto(item).size).toBe(expected);
+    expect((await contentToProfileDto({ ...content, fileUri: 'file:///remote.txt' })).size).toBe(
+      expected
+    );
+    await act(async () => {
+      root = TestRenderer.create(
+        <CurrentClipboardCard clipboard={content} isRemote onCopy={jest.fn()} />
+      );
+    });
+    expect(
+      root!.root
+        .findAllByType(Text)
+        .some(
+          (node: { props: { children: unknown } }) =>
+            node.props.children === expected.toLocaleString('zh-CN')
+        )
+    ).toBe(true);
+  }
+);
+
+it('drags downloaded WebDAV Unicode text with its content hash and without treating character size as bytes', async () => {
+  const full = `${'远端中文🚀'.repeat(3000)}FULL_TAIL`;
+  const hash = sha256(full).toUpperCase();
+  const profile = {
+    type: 'Text' as const,
+    text: full.slice(0, 10240),
+    hash,
+    hasData: true,
+    dataName: 'remote.txt',
+    size: full.length,
+  };
+  const remote = profileDtoToContent(profile);
+  const uri = 'file:///cache/remote.txt';
+  files.set(uri, encoder.encode(full));
+  const downloaded = await downloadForStorage(remote);
+  expect(downloaded!.fileUri).toBe(uri);
+  expect(historyService.addItem).toHaveBeenCalledWith(
+    expect.objectContaining({ size: full.length })
+  );
+  await act(async () => {
+    root = TestRenderer.create(
+      <CurrentClipboardCard clipboard={downloaded} isRemote onCopy={jest.fn()} />
+    );
+  });
+  const surface = root!.root.findByType('HistoryGestureSurface');
+  const source = root!.root.findByType('HistoryDragSource');
+  await act(async () =>
+    surface.props.onDragRequested({
+      nativeEvent: { gestureId: 7, sourceId: source.props.sourceId },
+    })
+  );
+  expect(mockStartDrag).toHaveBeenCalledWith(7, [{ id: hash, kind: 'textFile', fileUri: uri }]);
+});
+
+it('drags the local text file without size metadata and displays the full character count', async () => {
   const content = await new LocalClipboard().getClipboardContent();
   await act(async () => {
     root = TestRenderer.create(<CurrentClipboardCard clipboard={content} onCopy={jest.fn()} />);
@@ -272,7 +392,6 @@ it('passes actual producer bytes to Home native textFile drag and displays the f
       id: expect.any(String),
       kind: 'textFile',
       fileUri: tempUri,
-      expectedSize: files.get(tempUri)!.byteLength,
     },
   ]);
   expect(
@@ -285,11 +404,17 @@ it('passes actual producer bytes to Home native textFile drag and displays the f
   ).toBe(true);
 });
 
-it('shows bytes for a remote preview whose full character count is unknown', async () => {
+it('shows character counts for remote text metadata instead of byte units', async () => {
   await act(async () => {
     root = TestRenderer.create(
       <CurrentClipboardCard
-        clipboard={{ type: 'Text', text: 'preview...', hasData: true, fileSize: 4096 }}
+        clipboard={profileDtoToContent({
+          type: 'Text',
+          text: 'preview...',
+          hash: 'hash',
+          hasData: true,
+          size: 4096,
+        })}
         isRemote
         onCopy={jest.fn()}
       />
@@ -298,6 +423,6 @@ it('shows bytes for a remote preview whose full character count is unknown', asy
   expect(
     root!.root
       .findAllByType(Text)
-      .some((node: { props: { children: unknown } }) => node.props.children === '4.0 KB')
+      .some((node: { props: { children: unknown } }) => node.props.children === '4,096')
   ).toBe(true);
 });

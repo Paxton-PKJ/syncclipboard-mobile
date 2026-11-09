@@ -22,7 +22,7 @@ export async function contentToProfileDto(
   content: ClipboardContent,
   options?: ContentToProfileDtoOptions
 ): Promise<ProfileDto> {
-  let { type, text = '', profileHash, fileName, fileSize, fileUri } = content;
+  let { type, text = '', profileHash, fileName, fileSize, fileUri, textLength } = content;
 
   if (!profileHash) {
     profileHash = await calculateContentHash(content, options?.signal);
@@ -37,10 +37,16 @@ export async function contentToProfileDto(
           hash: profileHash,
           hasData: true,
           dataName: fileName,
-          size: fileSize,
+          size: textLength ?? text.length,
         };
       }
-      return { type: 'Text', text, hash: profileHash, hasData: false };
+      return {
+        type: 'Text',
+        text,
+        hash: profileHash,
+        hasData: false,
+        size: textLength ?? text.length,
+      };
     }
     case 'Image':
       return {
@@ -91,7 +97,8 @@ export function profileDtoToContent(profile: ProfileDto): ClipboardContent {
   if (hasData) {
     switch (type) {
       case 'Text':
-        return { ...baseContent, fileName: dataName, fileSize: size };
+        // TextProfile.Size 是字符数，远端元数据不能用作本地文件字节数。
+        return { ...baseContent, fileName: dataName, textLength: size || text?.length || 0 };
       case 'Image':
         return { ...baseContent, fileName: dataName, fileSize: size };
       case 'File':
