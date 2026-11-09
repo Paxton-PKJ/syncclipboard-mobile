@@ -19,7 +19,6 @@ import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import java.lang.ref.WeakReference
 import kotlin.math.hypot
@@ -91,7 +90,7 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
                     sourceMarker = WeakReference(marker)
                     downX = event.x; downY = event.y
                     remember(event)
-                    handler.postDelayed(activate, 500)
+                    handler.postDelayed(activate, ViewConfiguration.getLongPressTimeout().toLong())
                 }
             }
         }
@@ -146,7 +145,7 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
             promise.resolve(failed("UNAVAILABLE")); cancelGesture(); return
         }
         // Expo decoded this invocation into an independent value tree; IO runs only once per session.
-        executor.execute {
+        dragPreparationExecutor.execute {
             val prepared = runCatching { HistoryDragPayload.prepare(context, items) { current.cancelled } }
             handler.post {
                 val batch = prepared.getOrNull()
@@ -246,6 +245,5 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
 
     companion object {
         private val ids = AtomicInteger()
-        private val executor = Executors.newSingleThreadExecutor()
     }
 }

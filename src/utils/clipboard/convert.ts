@@ -91,7 +91,7 @@ export function profileDtoToContent(profile: ProfileDto): ClipboardContent {
   if (hasData) {
     switch (type) {
       case 'Text':
-        return { ...baseContent, fileName: dataName, fileSize: size || text?.length || 0 };
+        return { ...baseContent, fileName: dataName, fileSize: size };
       case 'Image':
         return { ...baseContent, fileName: dataName, fileSize: size };
       case 'File':
@@ -101,7 +101,7 @@ export function profileDtoToContent(profile: ProfileDto): ClipboardContent {
   }
 
   if (type === 'Text') {
-    return { ...baseContent, fileSize: size || text?.length || 0 };
+    return { ...baseContent, textLength: text?.length ?? 0 };
   }
 
   return baseContent;
@@ -187,7 +187,7 @@ export function clipboardContentToItem(
     localClipboardHash: content.localClipboardHash,
     hasData: content.hasData,
     dataName: content.fileName,
-    size: content.fileSize,
+    size: content.type === 'Text' ? (content.textLength ?? content.text.length) : content.fileSize,
     timestamp: content.timestamp || Date.now(),
     fileUri: content.fileUri,
     ...overrides,
@@ -200,7 +200,8 @@ export function historyItemToContent(item: HistoryItem): ClipboardContent {
     text: item.text,
     fileUri: item.fileUri,
     fileName: item.dataName,
-    fileSize: item.size,
+    fileSize: item.type === 'Text' ? undefined : item.size,
+    textLength: item.type === 'Text' ? (item.size ?? item.text.length) : undefined,
     profileHash: item.profileHash,
     localClipboardHash: item.localClipboardHash,
     hasData: item.hasData,

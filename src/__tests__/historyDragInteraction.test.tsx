@@ -103,6 +103,9 @@ it('wires the stable surface to range selection, disables list scrolling, and ke
     expect(enterMultiSelect).toHaveBeenCalledTimes(1);
     expect([...mockSnapshot.selectedIds]).toEqual(['source']);
     expect(root.root.findByType('FlashList').props.scrollEnabled).toBe(false);
+    expect(root.root.findByType('FlashList').props.maintainVisibleContentPosition.disabled).toBe(
+      true
+    );
     await act(async () =>
       root.update(mockReact.createElement(HistoryGestureList, { ...props, multiSelect: true }))
     );
@@ -120,6 +123,9 @@ it('wires the stable surface to range selection, disables list scrolling, and ke
       })
     );
     expect(root.root.findByType('FlashList').props.scrollEnabled).toBe(true);
+    expect(root.root.findByType('FlashList').props.maintainVisibleContentPosition.disabled).toBe(
+      false
+    );
     await act(async () =>
       surface().props.onDragRequested({ nativeEvent: { gestureId: 101, sourceId: 'source' } })
     );
@@ -226,6 +232,7 @@ function fixture() {
   const deps: HistoryDragSelectionDeps = {
     getSnapshot: () => ({ items, selectedIds }),
     getVisibleIds: () => items.map((item) => item.profileHash),
+    isMultiSelect: () => true,
     getList: () => ({
       getLayout: (index) => ({ x: 0, y: index * 50, width: 300, height: 50 }),
       getFirstItemOffset: () => 20,
@@ -295,12 +302,30 @@ it('keeps the initial hold in selection after React enters multi-select, then ac
   );
 });
 
+it('ignores an old drag request after a newer gesture has already requested preparation', async () => {
+  const f = fixture();
+  f.select(['0']);
+  await f.controller.drag({ gestureId: 1, sourceId: '0' });
+  await f.controller.drag({ gestureId: 2, sourceId: '0' });
+  await f.controller.drag({ gestureId: 1, sourceId: '0' });
+  expect(f.surface.startDrag).toHaveBeenCalledTimes(2);
+});
+
 it('extends an existing selection from an unselected source without toggling prior rows off', () => {
   const f = fixture();
   f.select(['40', '1']);
   f.event('start', 250, '2');
   f.event('move', 150, '2');
   expect(f.selected()).toEqual(['40', '1', '0', '2']);
+});
+
+it('starts a fresh selection from normal mode even when stale IDs remain in the store', () => {
+  const f = fixture();
+  f.deps.isMultiSelect = () => false;
+  f.select(['40', '1']);
+  f.event('start', 250, '2');
+  f.event('move', 150, '2');
+  expect(f.selected()).toEqual(['0', '1', '2']);
 });
 
 it('continues selection on every edge-scroll frame with a stationary finger and caps dt to 32ms', () => {
@@ -346,6 +371,7 @@ function delayedScrollFixture() {
   const controller = new HistoryDragSelectionController({
     getSnapshot: () => ({ items: [], selectedIds }),
     getVisibleIds: () => ids,
+    isMultiSelect: () => true,
     getList: () => ({
       getLayout: (index) => layouts[index],
       getFirstItemOffset: () => 0,

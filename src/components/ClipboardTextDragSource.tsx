@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Platform, View } from 'react-native';
 import {
   HistoryDragSource,
@@ -15,18 +15,19 @@ interface ClipboardTextDragSourceProps {
   children: React.ReactNode;
 }
 
+let nextGestureEpoch = 0;
+
 /** 单项文本沿用原生拖拽会话；只包裹预览，保留卡片按钮和滚动行为。 */
 export function ClipboardTextDragSource({ item, children }: ClipboardTextDragSourceProps) {
   const surfaceRef = useRef<HistoryGestureSurfaceHandle | null>(null);
   const currentItemRef = useRef(item);
-  const epochRef = useRef(0);
+  const gestureEpoch = useMemo(() => ++nextGestureEpoch, [item]);
   const mountedRef = useRef(true);
   const { t } = useTranslation();
   const { showMessage } = useMessageStore();
-  if (currentItemRef.current !== item) {
+  useLayoutEffect(() => {
     currentItemRef.current = item;
-    epochRef.current += 1;
-  }
+  }, [item]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -36,7 +37,7 @@ export function ClipboardTextDragSource({ item, children }: ClipboardTextDragSou
       // 原生 cancelGesture 仅取消准备；已开始的系统拖拽保留接收方的读取窗口。
       void surface?.cancelGesture().catch(() => {});
     };
-  }, [item]);
+  }, []);
 
   const handleDragRequested = async ({ gestureId, sourceId }: HistoryDragRequest) => {
     if (!item || sourceId !== item.id || Platform.OS !== 'android') return;
@@ -61,7 +62,7 @@ export function ClipboardTextDragSource({ item, children }: ClipboardTextDragSou
   return (
     <HistoryGestureSurface
       ref={surfaceRef}
-      gestureEpoch={epochRef.current}
+      gestureEpoch={gestureEpoch}
       enabled={!!item}
       onDragRequested={(event) => void handleDragRequested(event.nativeEvent)}
     >

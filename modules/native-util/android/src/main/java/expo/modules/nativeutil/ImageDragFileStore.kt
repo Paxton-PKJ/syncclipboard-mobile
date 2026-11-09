@@ -8,32 +8,32 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+
+internal val dragPreparationExecutor = Executors.newSingleThreadExecutor()
 
 /** 拖拽使用独立快照，避免剪贴板缓存清理使接收应用的 URI 失效。 */
 internal object ImageDragFileStore {
     private const val RETENTION_MS = 24 * 60 * 60 * 1000L
+    private const val MAX_CACHE_BYTES = 200 * 1024 * 1024L
     private val activeFiles = ConcurrentHashMap.newKeySet<String>()
 
     data class Snapshot(val file: File, val uri: Uri, val mimeType: String)
 
-    fun prepare(context: Context, fileUri: String, expectedSize: Long?, isCancelled: () -> Boolean = { false }): Snapshot {
+    fun prepare(context: Context, fileUri: String, expectedSize: Long?, isCancelled: () -> Boolean = { false }, itemId: String? = null): Snapshot {
         fun checkCancelled() { if (isCancelled()) throw HistoryDragFailure("CANCELLED") }
         checkCancelled()
         val uri = Uri.parse(fileUri)
-        require(uri.scheme == "file" && uri.authority.isNullOrEmpty()) { "Local file URI required" }
-        val source = File(requireNotNull(uri.path)).canonicalFile
-        require(source.isFile && source.canRead() && source.length() > 0) { "Image not ready" }
+        if (uri.scheme != "file" || !uri.authority.isNullOrEmpty() || uri.path == null) throw HistoryDragFailure("ITEM_NOT_READY", itemId)
+        val source = runCatching { File(uri.path!!).canonicalFile }.getOrElse { throw HistoryDragFailure("ITEM_NOT_READY", itemId) }
+        if (!source.isFile || !source.canRead() || source.length() <= 0) throw HistoryDragFailure("ITEM_NOT_READY", itemId)
         val size = source.length()
         val modified = source.lastModified()
-        require(expectedSize == null || expectedSize <= 0 || expectedSize == size) { "Incomplete image" }
+        if (expectedSize != null && expectedSize > 0 && expectedSize != size) throw HistoryDragFailure("SOURCE_CHANGED", itemId)
 
         val directory = File(context.cacheDir, ".native_util_drag")
-        check(directory.isDirectory || directory.mkdirs()) { "Drag cache unavailable" }
-        directory.listFiles()?.forEach {
-            if (it.absolutePath !in activeFiles && System.currentTimeMillis() - it.lastModified() > RETENTION_MS) {
-                it.delete()
-            }
-        }
+        if (!directory.isDirectory && !directory.mkdirs()) throw HistoryDragFailure("ITEM_NOT_READY", itemId)
+        cleanupDirectory(directory, reserveBytes = size)
         val target = File(directory, UUID.randomUUID().toString())
         activeFiles.add(target.absolutePath)
         try {
@@ -47,22 +47,18 @@ internal object ImageDragFileStore {
                 }
             } }
             checkCancelled()
-            check(target.length() == size && source.length() == size && source.lastModified() == modified) {
-                "Image changed while preparing drag"
-            }
+            if (target.length() != size || source.length() != size || source.lastModified() != modified) throw HistoryDragFailure("SOURCE_CHANGED", itemId)
             // 只读取图片头，不解码全尺寸位图。使用实际数据的 MIME，拒绝伪装成图片的文件。
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(target.absolutePath, bounds)
             val mime = bounds.outMimeType
-            require(bounds.outWidth > 0 && bounds.outHeight > 0 && mime != null && mime.startsWith("image/")) {
-                "Invalid image"
-            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || mime == null || !mime.startsWith("image/")) throw HistoryDragFailure("INVALID_IMAGE", itemId)
             val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: "img"
             val imageFile = File(directory, "${target.name}.$extension")
             activeFiles.add(imageFile.absolutePath)
             if (!target.renameTo(imageFile)) {
                 activeFiles.remove(imageFile.absolutePath)
-                error("Cannot finalize drag image")
+                throw HistoryDragFailure("ITEM_NOT_READY", itemId)
             }
             activeFiles.remove(target.absolutePath)
             try {
@@ -76,17 +72,36 @@ internal object ImageDragFileStore {
         } catch (error: Exception) {
             target.delete()
             activeFiles.remove(target.absolutePath)
-            throw error
+            if (error is HistoryDragFailure) throw error
+            throw HistoryDragFailure("ITEM_NOT_READY", itemId)
         }
     }
 
     fun release(snapshot: Snapshot) {
-        // 从拖拽结束计时，给目标应用时间读取；下一次拖拽时才清理过期快照。
+        // 从拖拽结束计时，给目标应用时间读取；启动、后台切换和下次拖拽时清理。
         if (activeFiles.remove(snapshot.file.absolutePath)) snapshot.file.setLastModified(System.currentTimeMillis())
     }
 
     fun discard(snapshot: Snapshot) {
         activeFiles.remove(snapshot.file.absolutePath)
         snapshot.file.delete()
+    }
+
+    fun cleanup(context: Context) = cleanupDirectory(File(context.cacheDir, ".native_util_drag"))
+
+    internal fun cleanupDirectory(directory: File, maxBytes: Long = MAX_CACHE_BYTES, reserveBytes: Long = 0, now: Long = System.currentTimeMillis()) {
+        if (reserveBytes > maxBytes) throw HistoryDragFailure("PAYLOAD_TOO_LARGE")
+        val files = directory.listFiles()?.filter { it.isFile } ?: emptyList()
+        files.filter { it.absolutePath !in activeFiles && now - it.lastModified() > RETENTION_MS }.forEach { it.delete() }
+        val remaining = files.filter { it.exists() }
+        var total = remaining.sumOf { it.length() }
+        remaining.filter { it.absolutePath !in activeFiles }.sortedBy { it.lastModified() }.forEach { file ->
+            if (total + reserveBytes > maxBytes) {
+                val size = file.length()
+                if (file.delete()) total -= size
+            }
+        }
+        // 活跃拖拽不可撤销 URI；如果仍没有空间，拒绝新快照。
+        if (total + reserveBytes > maxBytes) throw HistoryDragFailure("PAYLOAD_TOO_LARGE")
     }
 }

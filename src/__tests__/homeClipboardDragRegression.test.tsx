@@ -91,7 +91,9 @@ async function render(content: ClipboardContent, remote = true, acting = false) 
 }
 
 function sources() {
-  return root.root.findAllByType('ImageDragSource');
+  return root.root
+    .findAllByType('ImageDragSource')
+    .filter((node: { props: { enabled?: boolean } }) => node.props.enabled);
 }
 
 async function loadImage() {
@@ -236,7 +238,8 @@ it.each(['change', 'unmount'] as const)(
         root.update(card({ type: 'Text', text: 'new text', hasData: false }, false));
       else root.unmount();
     });
-    expect(mockCancelGesture).toHaveBeenCalled();
+    if (action === 'unmount') expect(mockCancelGesture).toHaveBeenCalledTimes(1);
+    else expect(mockCancelGesture).not.toHaveBeenCalled();
     if (action === 'change')
       expect(root.root.findByType('HistoryGestureSurface').props.gestureEpoch).toBeGreaterThan(
         epoch
