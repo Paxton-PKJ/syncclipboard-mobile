@@ -1,16 +1,16 @@
 import type {
-  HistoryDragErrorCode,
-  HistoryDragItem,
-  HistoryDragRequest,
-  HistoryGestureSurfaceHandle,
-  HistorySelectionGesture,
+  DragErrorCode,
+  DragItem,
+  DragRequest,
+  DragGestureSurfaceHandle,
+  SelectionGesture,
 } from 'native-util';
 import type { HistoryItem } from '@/types/clipboard';
 
 /** 历史拖拽整组校验失败，沿用原生业务错误码。 */
 export class HistoryDragSelectionError extends Error {
   constructor(
-    public code: HistoryDragErrorCode,
+    public code: DragErrorCode,
     public itemId?: string
   ) {
     super(code);
@@ -41,11 +41,48 @@ export function extendRangeSelection(
   return result;
 }
 
+/** 手势命中范围快照：可见条目、当前页激活状态、多选模式与布局作用域。 */
+export interface HistoryGestureScope {
+  items: readonly HistoryItem[];
+  active: boolean;
+  multiSelect: boolean;
+  /** 影响行几何但不改变数据的外部因素（如全图显示、容器宽度） */
+  layoutKey: string;
+}
+
+/**
+ * 判断手势作用域是否失效，是取消历史列表手势的唯一判定来源。
+ * 仅来源元数据、可见顺序、页签激活、退出多选或布局变化时失效；
+ * 收藏、访问时间和文本预览更新不影响命中范围，保持会话。
+ */
+export function isHistoryGestureScopeChanged(
+  previous: HistoryGestureScope,
+  next: HistoryGestureScope
+): boolean {
+  if (previous.active !== next.active || previous.layoutKey !== next.layoutKey) return true;
+  // 进入多选由手势自身触发，不能取消；退出多选则必须取消
+  if (previous.multiSelect && !next.multiSelect) return true;
+  if (previous.items === next.items) return false;
+  if (previous.items.length !== next.items.length) return true;
+  return next.items.some((item, index) => {
+    const old = previous.items[index];
+    return (
+      item.profileHash !== old.profileHash ||
+      item.type !== old.type ||
+      item.fileUri !== old.fileUri ||
+      item.hasData !== old.hasData ||
+      item.isDeleted !== old.isDeleted ||
+      item.dataName !== old.dataName ||
+      item.size !== old.size
+    );
+  });
+}
+
 /** 从同一完整快照按 Set 顺序生成 payload，任何失效项使整组失败。 */
 export function buildHistoryDragItems(
   items: readonly HistoryItem[],
   selectedIds: ReadonlySet<string>
-): HistoryDragItem[] {
+): DragItem[] {
   if (!selectedIds.size) throw new HistoryDragSelectionError('EMPTY_SELECTION');
   const byId = new Map(items.map((item) => [item.profileHash, item]));
   return [...selectedIds].map((id) => {
@@ -128,7 +165,7 @@ export function historyEdgeVelocity(y: number, top: number, height: number): num
 }
 
 /** 给 UI 展示本地化错误，取消无需提示。 */
-export function historyDragErrorMessage(code: HistoryDragErrorCode) {
+export function historyDragErrorMessage(code: DragErrorCode) {
   if (code === 'CANCELLED') return undefined;
   if (code === 'UNSUPPORTED_ITEM') return 'history.dragUnsupported';
   if (code === 'ITEM_NOT_FOUND') return 'history.dragMissing';
@@ -161,12 +198,12 @@ export interface HistoryDragSelectionDeps {
   getVisibleIds(): readonly string[];
   isMultiSelect(): boolean;
   getList(): HistorySelectionList | null;
-  getSurface(): HistoryGestureSurfaceHandle | null;
+  getSurface(): DragGestureSurfaceHandle | null;
   measureViewport(callback: (viewport: HistoryViewport) => void): void;
   select(ids: Set<string>): void;
   enterMultiSelect(): void;
   onRangeActive(active: boolean): void;
-  onError(code: HistoryDragErrorCode): void;
+  onError(code: DragErrorCode): void;
   requestFrame(callback: (time: number) => void): number;
   cancelFrame(id: number): void;
 }
@@ -180,7 +217,7 @@ export class HistoryDragSelectionController {
 
   constructor(private deps: HistoryDragSelectionDeps) {}
 
-  selection(event: HistorySelectionGesture): void {
+  selection(event: SelectionGesture): void {
     if (event.phase === 'start') {
       if (this.lastRequestedId !== undefined && event.gestureId <= this.lastRequestedId) return;
       this.stopRange();
@@ -323,7 +360,7 @@ export class HistoryDragSelectionController {
       .catch(() => {});
   }
 
-  async drag(event: HistoryDragRequest): Promise<void> {
+  async drag(event: DragRequest): Promise<void> {
     if (
       this.range ||
       (this.lastRequestedId !== undefined && event.gestureId <= this.lastRequestedId)

@@ -8,18 +8,13 @@ import {
   historyDragErrorMessage,
 } from '../screens/history/historyDragSelection';
 import type { HistoryDragSelectionDeps } from '../screens/history/historyDragSelection';
-import type {
-  HistoryDragErrorCode,
-  HistoryDragItem,
-  HistoryDragStartResult,
-  HistorySelectionGesture,
-} from 'native-util';
+import type { DragErrorCode, DragItem, DragStartResult, SelectionGesture } from 'native-util';
 
 jest.mock('native-util', () => ({
-  HistoryGestureSurface: mockReact.forwardRef(
+  DragGestureSurface: mockReact.forwardRef(
     (props: mockReact.PropsWithChildren<Record<string, unknown>>, ref) => {
       mockReact.useImperativeHandle(ref, () => mockSurface);
-      return mockReact.createElement('HistoryGestureSurface', props);
+      return mockReact.createElement('DragGestureSurface', props);
     }
   ),
 }));
@@ -76,7 +71,7 @@ it('wires the stable surface to range selection, disables list scrolling, and ke
   const enterMultiSelect = jest.fn();
   const props = {
     listProps: { data: mockSnapshot.items, renderItem: () => null },
-    scopeKey: 'same-data',
+    layoutKey: 'same-layout',
     active: true,
     multiSelect: false,
     enterMultiSelect,
@@ -87,7 +82,7 @@ it('wires the stable surface to range selection, disables list scrolling, and ke
     await act(async () => {
       root = TestRenderer.create(mockReact.createElement(HistoryGestureList, props));
     });
-    const surface = () => root.root.findByType('HistoryGestureSurface');
+    const surface = () => root.root.findByType('DragGestureSurface');
     const epoch = surface().props.gestureEpoch;
     await act(async () =>
       surface().props.onSelectionGesture({
@@ -137,7 +132,7 @@ it('wires the stable surface to range selection, disables list scrolling, and ke
         mockReact.createElement(HistoryGestureList, {
           ...props,
           multiSelect: true,
-          scopeKey: 'changed-filter',
+          layoutKey: 'changed-layout',
         })
       )
     );
@@ -169,7 +164,7 @@ it('hit-tests surface-local pointer coordinates against the container size, inde
       root = TestRenderer.create(
         mockReact.createElement(HistoryGestureList, {
           listProps: { data: mockSnapshot.items, renderItem: () => null },
-          scopeKey: 'local',
+          layoutKey: 'local',
           active: true,
           multiSelect: false,
           enterMultiSelect: jest.fn(),
@@ -178,7 +173,7 @@ it('hit-tests surface-local pointer coordinates against the container size, inde
         })
       );
     });
-    const surface = root!.root.findByType('HistoryGestureSurface');
+    const surface = root!.root.findByType('DragGestureSurface');
     // 小窗中容器位于窗口偏移处；该偏移不应参与本地坐标命中。
     await act(async () =>
       root.root
@@ -189,7 +184,7 @@ it('hit-tests surface-local pointer coordinates against the container size, inde
           nativeEvent: { layout: { x: 0, y: 300, width: 300, height: 100 } },
         })
     );
-    const gesture = (phase: HistorySelectionGesture['phase'], y: number) =>
+    const gesture = (phase: SelectionGesture['phase'], y: number) =>
       act(async () =>
         surface.props.onSelectionGesture({
           nativeEvent: { gestureId: 200, sourceId: 'A', phase, x: 100, y },
@@ -225,7 +220,7 @@ function fixture() {
   const frames = new Map<number, (time: number) => void>();
   const surface = {
     startDrag: jest
-      .fn<Promise<HistoryDragStartResult>, [number, HistoryDragItem[]]>()
+      .fn<Promise<DragStartResult>, [number, DragItem[]]>()
       .mockResolvedValue({ started: true }),
     cancelGesture: jest.fn().mockResolvedValue(undefined),
   };
@@ -259,7 +254,7 @@ function fixture() {
     },
   };
   const controller = new HistoryDragSelectionController(deps);
-  const event = (phase: HistorySelectionGesture['phase'], y = 150, sourceId = '0', gestureId = 1) =>
+  const event = (phase: SelectionGesture['phase'], y = 150, sourceId = '0', gestureId = 1) =>
     controller.selection({ phase, y, x: 100, sourceId, gestureId });
   return {
     controller,
@@ -405,7 +400,7 @@ function delayedScrollFixture() {
     contentHeight: (height: number) => {
       contentHeight = height;
     },
-    event: (phase: HistorySelectionGesture['phase'], y = 399, sourceId = 'A', gestureId = 1) =>
+    event: (phase: SelectionGesture['phase'], y = 399, sourceId = 'A', gestureId = 1) =>
       controller.selection({ phase, y, x: 100, sourceId, gestureId }),
     report: (offset: number) => {
       observed = offset;
@@ -612,7 +607,7 @@ it('maps unexpected bridge rejections to a localized failure', async () => {
 it('discards a pending result after blur/scope cancellation without clearing the selection', async () => {
   const f = fixture();
   f.select(['0']);
-  let resolve!: (result: HistoryDragStartResult) => void;
+  let resolve!: (result: DragStartResult) => void;
   f.surface.startDrag.mockImplementation(
     () =>
       new Promise((done) => {
@@ -633,6 +628,6 @@ it.each([
   ['SOURCE_CHANGED', 'history.dragNotReady'],
   ['PAYLOAD_TOO_LARGE', 'history.dragTooLarge'],
   ['UNAVAILABLE', 'history.dragFailed'],
-] as [HistoryDragErrorCode, string][])('localizes %s', (code, key) => {
+] as [DragErrorCode, string][])('localizes %s', (code, key) => {
   expect(historyDragErrorMessage(code)).toBe(key);
 });

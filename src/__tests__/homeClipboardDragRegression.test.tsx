@@ -8,13 +8,13 @@ import type { ClipboardContent } from '../types/clipboard';
 jest.mock('native-util', () => {
   const React = jest.requireActual('react');
   return {
-    HistoryDragSource: 'HistoryDragSource',
-    HistoryGestureSurface: React.forwardRef((props: object, ref: unknown) => {
+    DragSource: 'DragSource',
+    DragGestureSurface: React.forwardRef((props: object, ref: unknown) => {
       React.useImperativeHandle(ref, () => ({
         startDrag: mockStartDrag,
         cancelGesture: mockCancelGesture,
       }));
-      return React.createElement('HistoryGestureSurface', props);
+      return React.createElement('DragGestureSurface', props);
     }),
   };
 });
@@ -22,7 +22,10 @@ jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) =>
 jest.mock('../hooks/useTheme', () => ({ useTheme: () => ({ theme: { colors: {} } }) }));
 jest.mock('../stores', () => ({ useSettingsStore: () => ({ config: {} }) }));
 jest.mock('../stores/messageStore', () => ({
-  useMessageStore: () => ({ showMessage: mockShowMessage }),
+  useMessageStore: (selector?: (state: { showMessage: unknown }) => unknown) => {
+    const state = { showMessage: mockShowMessage };
+    return selector ? selector(state) : state;
+  },
 }));
 jest.mock('../utils/fileActions', () => ({}));
 jest.mock('../utils/clipboard/clipboardContentUtils', () => ({}));
@@ -91,7 +94,7 @@ async function render(content: ClipboardContent, remote = true, acting = false) 
 
 function sources() {
   return root.root
-    .findAllByType('HistoryDragSource')
+    .findAllByType('DragSource')
     .filter(
       (node: { props: { gestureMode?: string; accessibilityHint?: string } }) =>
         node.props.gestureMode === 'drag' &&
@@ -114,8 +117,8 @@ it('keeps a loaded local image draggable while upload is active', async () => {
 });
 
 async function requestTextDrag() {
-  const surface = root.root.findByType('HistoryGestureSurface');
-  const source = root.root.findByType('HistoryDragSource');
+  const surface = root.root.findByType('DragGestureSurface');
+  const source = root.root.findByType('DragSource');
   await act(async () =>
     surface.props.onDragRequested({
       nativeEvent: { gestureId: 7, sourceId: source.props.sourceId },
@@ -171,10 +174,10 @@ it.each([false, true])('drags complete remote text (file-backed=%s)', async (has
 it('keeps local text and its gesture owner stable when uploading starts', async () => {
   const content: ClipboardContent = { type: 'Text', text: 'complete local text', hasData: false };
   await render(content, false);
-  const surface = root.root.findByType('HistoryGestureSurface');
+  const surface = root.root.findByType('DragGestureSurface');
   const epoch = surface.props.gestureEpoch;
   await act(async () => root.update(card(content, false, true)));
-  expect(root.root.findByType('HistoryGestureSurface')).toBe(surface);
+  expect(root.root.findByType('DragGestureSurface')).toBe(surface);
   expect(surface.props.gestureEpoch).toBe(epoch);
   expect(mockCancelGesture).not.toHaveBeenCalled();
   await requestTextDrag();
@@ -200,13 +203,13 @@ it.each([
   await render({ type: 'Text', text: 'only a preview', ...extra }, remote, acting);
   await requestTextDrag();
   expect(mockStartDrag).not.toHaveBeenCalled();
-  expect(root.root.findByType('HistoryDragSource').props.gestureMode).toBe('disabled');
+  expect(root.root.findByType('DragSource').props.gestureMode).toBe('disabled');
 });
 
-it('keeps iOS text selectable without a native drag surface', async () => {
+// 非 Android 下 native-util 入口自身渲染普通 View（见 imageDragUnsupportedPlatform 测试）
+it('keeps iOS text selectable', async () => {
   Platform.OS = 'ios';
   await render({ type: 'Text', text: 'selectable text', hasData: false }, false);
-  expect(root.root.findAllByType('HistoryGestureSurface')).toHaveLength(0);
   expect(
     root.root
       .findAllByType(Text)
@@ -237,7 +240,7 @@ it.each(['change', 'unmount'] as const)(
         })
     );
     await render({ type: 'Text', text: 'old complete text', hasData: false }, false);
-    const epoch = root.root.findByType('HistoryGestureSurface').props.gestureEpoch;
+    const epoch = root.root.findByType('DragGestureSurface').props.gestureEpoch;
     await requestTextDrag();
     await act(async () => {
       if (action === 'change')
@@ -247,9 +250,7 @@ it.each(['change', 'unmount'] as const)(
     if (action === 'unmount') expect(mockCancelGesture).toHaveBeenCalledTimes(1);
     else expect(mockCancelGesture).not.toHaveBeenCalled();
     if (action === 'change')
-      expect(root.root.findByType('HistoryGestureSurface').props.gestureEpoch).toBeGreaterThan(
-        epoch
-      );
+      expect(root.root.findByType('DragGestureSurface').props.gestureEpoch).toBeGreaterThan(epoch);
     await act(async () => rejectPreparation(new Error('old native failure')));
     expect(mockShowMessage).not.toHaveBeenCalled();
   }
@@ -265,12 +266,12 @@ it('invalidates image readiness when the clipboard changes and ignores an old fa
   );
   await render(image, false);
   await loadImage();
-  const surface = root.root.findByType('HistoryGestureSurface');
+  const surface = root.root.findByType('DragGestureSurface');
   const epoch = surface.props.gestureEpoch;
   await requestTextDrag();
   await act(async () => root.update(card({ ...image, fileUri: 'file:///cache/new.png' }, false)));
   expect(sources()).toHaveLength(0);
-  expect(root.root.findByType('HistoryGestureSurface')).toBe(surface);
+  expect(root.root.findByType('DragGestureSurface')).toBe(surface);
   expect(surface.props.gestureEpoch).toBeGreaterThan(epoch);
   await act(async () => resolvePreparation({ started: false, code: 'START_FAILED' }));
   expect(mockShowMessage).not.toHaveBeenCalled();

@@ -5,10 +5,11 @@ import android.view.View
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.views.ExpoView
 
-/** 仅保存命中元数据；Fabric 独占 React 子视图的布局。 */
-class HistoryDragSourceView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
-    var sourceId: String = ""
-    var gestureMode: String = "disabled"
+/**
+ * 拖拽相关原生视图的共享基类。
+ * Fabric 独占 React 子视图的布局，这里只按约束测量自身，不重新布局子视图。
+ */
+abstract class DragHostView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         setMeasuredDimension(View.getDefaultSize(suggestedMinimumWidth, widthMeasureSpec),
             View.getDefaultSize(suggestedMinimumHeight, heightMeasureSpec))

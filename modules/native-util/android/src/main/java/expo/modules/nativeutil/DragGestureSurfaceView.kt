@@ -18,24 +18,23 @@ import com.facebook.react.uimanager.events.NativeGestureUtil
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.viewevent.EventDispatcher
-import expo.modules.kotlin.views.ExpoView
 import java.util.concurrent.atomic.AtomicInteger
 import java.lang.ref.WeakReference
 import kotlin.math.hypot
 
-/** 列表级手势持有者：识别前保留按钮和滚动，激活后不依赖起始行。 */
-class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
+/** 列表/卡片级手势持有者：识别前保留按钮和滚动，激活后不依赖起始行。 */
+class DragGestureSurfaceView(context: Context, appContext: AppContext) : DragHostView(context, appContext) {
     private val onSelectionGesture by EventDispatcher()
     private val onDragRequested by EventDispatcher()
     private val onDragEnded by EventDispatcher()
     private val handler = Handler(Looper.getMainLooper())
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
-    private var session: HistoryGestureSession? = null
+    private var session: DragGestureSession? = null
     private var lastTouch: MotionEvent? = null
     private var downX = 0f
     private var downY = 0f
-    private var payload: HistoryDragPayload? = null
-    private var sourceMarker: WeakReference<HistoryDragSourceView>? = null
+    private var payload: DragPayload? = null
+    private var sourceMarker: WeakReference<DragSourceView>? = null
     var gestureEpoch: Int = 0
         set(value) { if (field != value) cancelGesture(); field = value }
     var gestureEnabled: Boolean = true
@@ -73,12 +72,6 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
         }
     }
 
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        setMeasuredDimension(View.getDefaultSize(suggestedMinimumWidth, widthMeasureSpec),
-            View.getDefaultSize(suggestedMinimumHeight, heightMeasureSpec))
-    }
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {}
-
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             if (session?.started == true) return super.dispatchTouchEvent(event)
@@ -86,7 +79,7 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
             if (gestureEnabled) {
                 val marker = findMarker(this, event.x, event.y)
                 if (marker != null && marker.gestureMode != "disabled" && marker.sourceId.isNotEmpty()) {
-                    session = HistoryGestureSession(ids.incrementAndGet(), marker.sourceId, marker.gestureMode)
+                    session = DragGestureSession(ids.incrementAndGet(), marker.sourceId, marker.gestureMode)
                     sourceMarker = WeakReference(marker)
                     downX = event.x; downY = event.y
                     remember(event)
@@ -114,9 +107,9 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
                 cancelGesture()
             }
         }
-        // Still dispatch to children first so buttons and scroll containers keep their gestures.
-        // Static text may reject DOWN; retain that candidate's stream so UP/CANCEL can stop
-        // the delayed activation. Keep the pre-cleanup session for terminal-event handling.
+        // 仍先分发给子视图，保证按钮和滚动容器保留各自手势。
+        // 静态文本可能拒绝 DOWN；保留该候选会话的事件流，使 UP/CANCEL 能停止延迟激活。
+        // 终止事件处理使用清理前的会话引用。
         val handled = super.dispatchTouchEvent(event)
         return handled || (current != null && !current.started)
     }
@@ -127,7 +120,7 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
     fun cancelGesture() {
         val current = session
         handler.removeCallbacks(activate)
-        // A global drag normally moves focus to the receiving app. Never revoke its URI here.
+        // 全局拖拽通常会把焦点移到接收应用，此处绝不能撤销其 URI。
         if (current?.started == true) return
         if (current?.active == true && current.mode == "select") lastTouch?.let { emitSelection(current, "cancel", it) }
         current?.cancel()
@@ -144,15 +137,15 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || !isAttachedToWindow || width <= 0 || height <= 0 || appContext.currentActivity == null) {
             promise.resolve(failed("UNAVAILABLE")); cancelGesture(); return
         }
-        // Expo decoded this invocation into an independent value tree; IO runs only once per session.
+        // Expo 已将本次调用解码为独立的值树；每个会话只执行一次 IO。
         dragPreparationExecutor.execute {
-            val prepared = runCatching { HistoryDragPayload.prepare(context, items) { current.cancelled } }
+            val prepared = runCatching { DragPayload.prepare(context, items) { current.cancelled } }
             handler.post { completePreparation(current, prepared, promise) }
         }
     }
 
     /** 所有图片与文本共用主线程完成路径；松手、卸载和来源变更优先按取消处理。 */
-    internal fun completePreparation(current: HistoryGestureSession, prepared: Result<HistoryDragPayload>, promise: Promise) {
+    internal fun completePreparation(current: DragGestureSession, prepared: Result<DragPayload>, promise: Promise) {
         val batch = prepared.getOrNull()
         if (current.cancelled || session !== current || !isAttachedToWindow) {
             batch?.discard()
@@ -161,12 +154,12 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
         }
         if (batch == null) {
             val error = prepared.exceptionOrNull()
-            promise.resolve(if (error is HistoryDragFailure) failed(error.code, error.itemId) else failed("START_FAILED"))
+            promise.resolve(if (error is DragFailure) failed(error.code, error.itemId) else failed("START_FAILED"))
             cancelGesture()
             return
         }
         payload = batch
-        // Set before the synchronous DRAG_STARTED dispatch so the source accepts the end event.
+        // 在同步分发 DRAG_STARTED 之前置位，使来源视图能接收结束事件。
         current.started = true
         val started = runCatching {
             val marker = sourceMarker?.get()?.takeIf { it.sourceId == current.sourceId }
@@ -188,7 +181,7 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
     }
     override fun onDetachedFromWindow() {
         cancelGesture()
-        // A detached successful source still gives the receiver the full retention window.
+        // 已成功启动的拖拽即使来源卸载，接收方仍拥有完整的保留窗口。
         payload?.release(); payload = null
         finishTouch(); session = null; sourceMarker = null
         super.onDetachedFromWindow()
@@ -202,15 +195,15 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
         lastTouch = null
         parent?.requestDisallowInterceptTouchEvent(false)
     }
-    // Surface-local dp: raw screen coordinates drift from RN window coordinates in scaled or
-    // moved freeform windows, while event.x/y stay in this view's own frame.
-    private fun emitSelection(current: HistoryGestureSession, phase: String, event: MotionEvent) {
+    // 使用 surface 本地 dp 坐标：在缩放或移动的自由窗口中，原始屏幕坐标会与 RN 窗口坐标
+    // 产生偏移，而 event.x/y 始终位于本视图自身坐标系。
+    private fun emitSelection(current: DragGestureSession, phase: String, event: MotionEvent) {
         val density = resources.displayMetrics.density
         onSelectionGesture(mapOf("gestureId" to current.id, "sourceId" to current.sourceId,
             "phase" to phase, "x" to event.x / density, "y" to event.y / density))
     }
-    /** Hit-tests in the parent's local coordinates, mirroring ViewGroup touch transformation. */
-    private fun findMarker(view: View, x: Float, y: Float): HistoryDragSourceView? {
+    /** 在父视图本地坐标中命中测试，与 ViewGroup 的触摸坐标变换保持一致。 */
+    private fun findMarker(view: View, x: Float, y: Float): DragSourceView? {
         if (view.visibility != View.VISIBLE) return null
         if (x < 0 || y < 0 || x >= view.width || y >= view.height) return null
         if (view is ViewGroup) for (index in view.childCount - 1 downTo 0) {
@@ -219,12 +212,12 @@ class HistoryGestureSurfaceView(context: Context, appContext: AppContext) : Expo
             if (!child.matrix.isIdentity) Matrix().also { child.matrix.invert(it) }.mapPoints(point)
             findMarker(child, point[0], point[1])?.let { return it }
         }
-        return view as? HistoryDragSourceView
+        return view as? DragSourceView
     }
     private fun failed(code: String, itemId: String? = null): Map<String, Any> =
         mutableMapOf<String, Any>("started" to false, "code" to code).apply { if (itemId != null) put("itemId", itemId) }
 
-    /** Bounded card thumbnail and batch count, never a shadow of the entire list. */
+    /** 有界的卡片缩略图与批量计数，绝不使用整个列表作为阴影。 */
     private inner class BatchShadow(private val source: View?, private val count: Int) : View.DragShadowBuilder() {
         private val density = resources.displayMetrics.density
         private val shadowWidth = (240 * density).toInt()

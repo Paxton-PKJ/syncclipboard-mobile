@@ -2,16 +2,23 @@ import React from 'react';
 // @ts-expect-error React Native provides the renderer without its type declarations.
 import TestRenderer, { act } from 'react-test-renderer';
 import { requireNativeViewManager } from 'expo-modules-core';
-import * as mockSurface from '../../modules/native-util/src/HistoryGestureSurface';
-import * as mockSource from '../../modules/native-util/src/HistoryDragSource';
+import * as mockSurface from '../../modules/native-util/src/DragGestureSurface';
+import * as mockSource from '../../modules/native-util/src/DragSource';
 import { ClipboardDragSource } from '../components/ClipboardDragSource';
 
-jest.mock('react-native', () => ({ Platform: { OS: 'ios' }, View: 'View' }));
+jest.mock('react-native', () => ({
+  Platform: { OS: 'ios' },
+  View: 'View',
+  StyleSheet: { create: <T,>(styles: T) => styles },
+}));
 jest.mock('expo-modules-core', () => ({ requireNativeViewManager: jest.fn() }));
 jest.mock('native-util', () => ({ ...mockSurface, ...mockSource }));
 jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 jest.mock('../stores/messageStore', () => ({
-  useMessageStore: () => ({ showMessage: jest.fn() }),
+  useMessageStore: (selector?: (state: { showMessage: unknown }) => unknown) => {
+    const state = { showMessage: jest.fn() };
+    return selector ? selector(state) : state;
+  },
 }));
 
 it.each(['Text', 'Image'] as const)(
@@ -38,8 +45,13 @@ it.each(['Text', 'Image'] as const)(
         );
       });
       expect(requireNativeViewManager).not.toHaveBeenCalled();
-      expect(root.root.findByType('View').props.testID).toBe('preview');
-      expect(root.root.findByType('View').props.fileUri).toBeUndefined();
+      const views = root!.root.findAllByType('View');
+      expect(
+        views.some((view: { props: { testID?: string } }) => view.props.testID === 'preview')
+      ).toBe(true);
+      expect(
+        views.every((view: { props: { fileUri?: string } }) => view.props.fileUri === undefined)
+      ).toBe(true);
     } finally {
       await act(async () => root?.unmount());
       testGlobal.IS_REACT_ACT_ENVIRONMENT = previous;

@@ -17,9 +17,6 @@ interface HistoryState {
   /** 历史记录列表 */
   items: HistoryItem[];
 
-  /** 仅来源元数据、可见顺序、筛选或排序变化时递增的手势版本 */
-  gestureRevision: number;
-
   /** 总记录数 */
   totalCount: number;
 
@@ -120,7 +117,6 @@ interface HistoryState {
  */
 const initialState = {
   items: [],
-  gestureRevision: 0,
   totalCount: 0,
   filter: null,
   sort: null,
@@ -565,27 +561,3 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     set(initialState);
   },
 }));
-
-// 集中观察所有 store 写入，避免 UI 反复序列化完整文本；收藏和访问时间本身不取消手势。
-useHistoryStore.subscribe((state, previous) => {
-  const sourcesChanged =
-    state.items !== previous.items &&
-    (state.items.length !== previous.items.length ||
-      state.items.some((item, index) => {
-        const old = previous.items[index];
-        return (
-          item.profileHash !== old.profileHash ||
-          item.type !== old.type ||
-          item.fileUri !== old.fileUri ||
-          item.hasData !== old.hasData ||
-          item.isDeleted !== old.isDeleted ||
-          item.dataName !== old.dataName ||
-          item.size !== old.size
-        );
-      }));
-  if (sourcesChanged || state.filter !== previous.filter || state.sort !== previous.sort) {
-    useHistoryStore.setState({
-      gestureRevision: Math.max(state.gestureRevision, previous.gestureRevision) + 1,
-    });
-  }
-});

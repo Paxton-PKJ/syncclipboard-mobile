@@ -23,9 +23,9 @@ import { openFile, shareFile, saveToGallery } from '@/utils/fileActions';
 import { formatFileSize, formatSizeWithType, isTextInvalid } from '@/utils';
 import { saveContentDataToDirectory } from '@/utils/clipboard/clipboardContentUtils';
 import * as FileSystem from 'expo-file-system/legacy';
-import { type HistoryDragItem, type ProgressInfo } from 'native-util';
+import { type ProgressInfo } from 'native-util';
 import { ClipboardTypeIcon } from './ClipboardTypeIcon';
-import { ClipboardDragSource } from './ClipboardDragSource';
+import { ClipboardDragSource, type ClipboardDragItem } from './ClipboardDragSource';
 
 // 原生文件拖拽要求无 authority 的绝对 file URI，支持 file:/ 和 file:///。
 const isLocalDragFileUri = (uri?: string): uri is string =>
@@ -76,7 +76,6 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     clipboard?.fileSize,
     clipboard?.localClipboardHash,
     clipboard?.profileHash,
-    clipboard?.timestamp,
   ]);
   const currentImageIdentityRef = useRef<string | null>(imageIdentity);
   const mountedRef = useRef(true);
@@ -88,7 +87,7 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     };
   }, []);
   const remoteDragBlocked = isRemote && acting;
-  const imageDragItem = useMemo<HistoryDragItem | null>(() => {
+  const imageDragItem = useMemo<ClipboardDragItem | null>(() => {
     if (
       Platform.OS !== 'android' ||
       clipboard?.type !== 'Image' ||
@@ -98,7 +97,7 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     )
       return null;
     return {
-      id: clipboard.profileHash || clipboard.localClipboardHash || 'clipboard-image',
+      id: clipboard.profileHash || clipboard.localClipboardHash,
       kind: 'image',
       fileUri: clipboard.fileUri,
       expectedSize: clipboard.fileSize,
@@ -113,9 +112,9 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     imageIdentity,
     remoteDragBlocked,
   ]);
-  const textDragItem = useMemo<HistoryDragItem | null>(() => {
+  const textDragItem = useMemo<ClipboardDragItem | null>(() => {
     if (clipboard?.type !== 'Text' || remoteDragBlocked) return null;
-    const id = clipboard.profileHash || clipboard.localClipboardHash || 'clipboard-text';
+    const id = clipboard.profileHash || clipboard.localClipboardHash;
     if (clipboard.hasData) {
       if (!isLocalDragFileUri(clipboard.fileUri)) return null;
       return {
@@ -133,7 +132,6 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     clipboard?.text,
     clipboard?.localClipboardHash,
     clipboard?.profileHash,
-    clipboard?.timestamp,
     remoteDragBlocked,
   ]);
 
@@ -249,6 +247,22 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     return '';
   };
 
+  /** 标题栏大小标签；无可靠大小信息时返回 null，避免渲染空 Text。 */
+  const getSizeLabel = (): string | null => {
+    if (clipboard.type !== 'Text') {
+      return clipboard.fileSize !== undefined
+        ? formatSizeWithType(clipboard.fileSize, clipboard.type)
+        : null;
+    }
+    if (clipboard.textLength !== undefined) return formatSizeWithType(clipboard.textLength, 'Text');
+    if (clipboard.fileSize === undefined) return null;
+    // 内联文本直接以字符数展示；完整文本存于文件时展示文件字节大小
+    return clipboard.hasData
+      ? formatSizeWithType(clipboard.fileSize)
+      : formatSizeWithType(clipboard.text.length, 'Text');
+  };
+
+  const sizeLabel = getSizeLabel();
   const previewText = getPreviewText();
   const isLongText = previewText.length > 200;
 
@@ -430,18 +444,8 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
           </View>
         </View>
 
-        {(clipboard.fileSize !== undefined || clipboard.textLength !== undefined) && (
-          <Text style={[styles.sizeLabel, { color: theme.colors.textSecondary }]}>
-            {clipboard.type === 'Text'
-              ? clipboard.textLength !== undefined
-                ? formatSizeWithType(clipboard.textLength, 'Text')
-                : !clipboard.hasData
-                  ? formatSizeWithType(clipboard.text.length, 'Text')
-                  : clipboard.fileSize !== undefined
-                    ? formatSizeWithType(clipboard.fileSize)
-                    : ''
-              : formatSizeWithType(clipboard.fileSize, clipboard.type)}
-          </Text>
+        {sizeLabel !== null && (
+          <Text style={[styles.sizeLabel, { color: theme.colors.textSecondary }]}>{sizeLabel}</Text>
         )}
       </View>
 

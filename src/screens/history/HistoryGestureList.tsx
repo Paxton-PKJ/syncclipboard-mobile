@@ -3,15 +3,21 @@ import { Platform, StyleSheet, View } from 'react-native';
 import { FlashList, type FlashListProps, type FlashListRef } from '@shopify/flash-list';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
-import { HistoryGestureSurface, type HistoryGestureSurfaceHandle } from 'native-util';
+import { DragGestureSurface, type DragGestureSurfaceHandle } from 'native-util';
 import { useHistoryStore } from '@/stores/historyStore';
 import { useMessageStore } from '@/stores/messageStore';
 import type { HistoryItem } from '@/types/clipboard';
-import { HistoryDragSelectionController, historyDragErrorMessage } from './historyDragSelection';
+import {
+  HistoryDragSelectionController,
+  historyDragErrorMessage,
+  isHistoryGestureScopeChanged,
+  type HistoryGestureScope,
+} from './historyDragSelection';
 
 interface HistoryGestureListProps {
   listProps: FlashListProps<HistoryItem>;
-  scopeKey: string;
+  /** 影响行几何但不改变数据的布局作用域，变化时取消手势 */
+  layoutKey: string;
   active: boolean;
   multiSelect: boolean;
   enterMultiSelect(): void;
@@ -22,14 +28,16 @@ interface HistoryGestureListProps {
 /** 稳定的列表级触摸容器，使持续选择不依赖 FlashList 源行存活。 */
 export function HistoryGestureList(props: HistoryGestureListProps) {
   const { t } = useTranslation();
+  const latestT = useRef(t);
+  latestT.current = t;
   const latest = useRef(props);
   latest.current = props;
   const viewportSize = useRef<{ width: number; height: number } | null>(null);
   const listRef = useRef<FlashListRef<HistoryItem>>(null);
-  const surfaceRef = useRef<HistoryGestureSurfaceHandle>(null);
+  const surfaceRef = useRef<DragGestureSurfaceHandle>(null);
   const [rangeActive, setRangeActive] = useState(false);
   const [gestureEpoch, setGestureEpoch] = useState(0);
-  const previousVisibleIds = useRef<readonly string[] | null>(null);
+  const previousScope = useRef<HistoryGestureScope | null>(null);
   const controllerRef = useRef<HistoryDragSelectionController | null>(null);
   if (!controllerRef.current) {
     controllerRef.current = new HistoryDragSelectionController({
@@ -50,7 +58,8 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
       },
       onError: (code) => {
         const key = historyDragErrorMessage(code);
-        if (key) useMessageStore.getState().showMessage(t(key), 'error');
+        // 通过 ref 读取最新的 t，避免语言切换后仍使用首帧闭包
+        if (key) useMessageStore.getState().showMessage(latestT.current(key), 'error');
       },
       requestFrame: (callback) => requestAnimationFrame(callback),
       cancelFrame: (id) => cancelAnimationFrame(id),
@@ -62,23 +71,15 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
     setGestureEpoch((epoch) => epoch + 1);
   }, [controller]);
 
+  // 唯一的作用域失效来源：比较前后快照，失效时取消手势并递增 epoch
+  const { active, multiSelect, layoutKey } = props;
+  const data = props.listProps.data;
   useLayoutEffect(() => {
-    cancel();
-  }, [cancel, props.scopeKey, props.active]);
-  useLayoutEffect(() => {
-    const ids = (props.listProps.data ?? []).map((item) => item.profileHash);
-    const previous = previousVisibleIds.current;
-    // 收藏分类的成员变化也会改变命中范围，普通分类仅更新收藏图标时保持会话。
-    if (
-      previous &&
-      (ids.length !== previous.length || ids.some((id, index) => id !== previous[index]))
-    )
-      cancel();
-    previousVisibleIds.current = ids;
-  }, [cancel, props.listProps.data]);
-  useLayoutEffect(() => {
-    if (!props.multiSelect) cancel();
-  }, [cancel, props.multiSelect]);
+    const next: HistoryGestureScope = { items: data ?? [], active, multiSelect, layoutKey };
+    const previous = previousScope.current;
+    previousScope.current = next;
+    if (previous && isHistoryGestureScopeChanged(previous, next)) cancel();
+  }, [cancel, data, active, multiSelect, layoutKey]);
   useFocusEffect(useCallback(() => () => cancel(), [cancel]));
   useLayoutEffect(() => () => controller.cancel(), [controller]);
   useLayoutEffect(() => {
@@ -98,7 +99,7 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
         controller.onViewportChanged();
       }}
     >
-      <HistoryGestureSurface
+      <DragGestureSurface
         ref={surfaceRef}
         style={styles.container}
         enabled={Platform.OS === 'android' && props.active}
@@ -122,7 +123,7 @@ export function HistoryGestureList(props: HistoryGestureListProps) {
           }}
           scrollEventThrottle={16}
         />
-      </HistoryGestureSurface>
+      </DragGestureSurface>
     </View>
   );
 }
