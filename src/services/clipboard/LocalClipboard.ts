@@ -10,7 +10,7 @@ import { ClipboardContent } from '@/types';
 import { calculateTextHash, calculateFileHash } from '@/utils/hash';
 import { isTextInvalid } from '@/utils/index';
 import { historyStorage } from '../../storage/HistoryStorage';
-import { prepareTempFilePath, CLIPBOARD_TEMP_DIR } from '@/utils/fileStorage';
+import { prepareTempFilePath, CLIPBOARD_TEMP_DIR, getHistoryFileUri } from '@/utils/fileStorage';
 import { nativeSetClipboardImageFromFile } from 'native-util';
 import i18n from '@/i18n';
 import { measureStartup } from '@/services/StartupTiming';
@@ -28,9 +28,58 @@ export interface CopyLifecycleCallbacks {
 /**
  * 剪贴板管理器类
  */
+/** 已校验文本文件缓存的最大条目数 */
+const MAX_VERIFIED_TEXT_FILES = 32;
+
 export class LocalClipboard {
   private copyLifecycleCallbacks: CopyLifecycleCallbacks | null = null;
   private remoteCopiedCallback: ((content: ClipboardContent) => void) | null = null;
+  /** 已校验完整内容的文本文件（按 URI 索引，插入顺序即 LRU 顺序） */
+  private verifiedTextFiles = new Map<
+    string,
+    { hash: string; size: number; modified: number | null }
+  >();
+
+  /**
+   * 判断文本文件是否保存了完整的当前文本。
+   * 每个文件（URI + 修改时间）只在首次遇到时整文件比对一次；之后按元数据命中缓存，
+   * 使在多条长文本间切换的剪贴板轮询不会反复读取整个文件。
+   */
+  private async matchesTextFile(
+    file: FileSystem.File,
+    text: string,
+    hash: string,
+    bytes: number
+  ): Promise<boolean> {
+    if (!file.exists || file.size !== bytes) return false;
+    const previous = this.verifiedTextFiles.get(file.uri);
+    if (
+      previous?.hash === hash &&
+      previous.size === bytes &&
+      previous.modified === file.modificationTime
+    ) {
+      // 刷新 LRU 顺序
+      this.verifiedTextFiles.delete(file.uri);
+      this.verifiedTextFiles.set(file.uri, previous);
+      return true;
+    }
+    try {
+      if ((await file.text()) !== text) return false;
+      this.rememberTextFile(file, hash, bytes);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private rememberTextFile(file: FileSystem.File, hash: string, size: number): void {
+    this.verifiedTextFiles.delete(file.uri);
+    this.verifiedTextFiles.set(file.uri, { hash, size, modified: file.modificationTime });
+    if (this.verifiedTextFiles.size > MAX_VERIFIED_TEXT_FILES) {
+      const oldest = this.verifiedTextFiles.keys().next().value;
+      if (oldest !== undefined) this.verifiedTextFiles.delete(oldest);
+    }
+  }
 
   /**
    * 注册复制生命周期回调（由 ClipboardMonitor 调用）
@@ -78,16 +127,16 @@ export class LocalClipboard {
   private async getTextContentFromString(text: string): Promise<ClipboardContent> {
     const profileHash = await measureStartup('local.textHash', () => calculateTextHash(text));
     const timestamp = Date.now();
+    const textBytes = new TextEncoder().encode(text);
 
     // 步骤1: 根据 profileHash 查询历史记录
-    let historyItem = await measureStartup('local.historyLookup', () =>
+    const historyItem = await measureStartup('local.historyLookup', () =>
       historyStorage.getItemByLocalHash(profileHash)
     );
 
     if (historyItem && historyItem.type === 'Text') {
       // 如果历史记录有外部文件，验证文件是否存在
       if (historyItem.hasData && historyItem.dataName) {
-        const { getHistoryFileUri } = await import('@/utils/fileStorage');
         const historyFileUri = await getHistoryFileUri(
           'Text',
           historyItem.profileHash,
@@ -98,7 +147,14 @@ export class LocalClipboard {
           const { File } = FileSystem;
           const historyFile = new File(historyFileUri);
 
-          if (historyFile.exists) {
+          const matchesFullText = await this.matchesTextFile(
+            historyFile,
+            text,
+            profileHash,
+            textBytes.byteLength
+          );
+
+          if (matchesFullText) {
             // 生成预览文本：如果有历史文本则使用，否则从当前文本取前200字符
             let previewText = historyItem.text;
             if (!previewText) {
@@ -111,7 +167,8 @@ export class LocalClipboard {
               text: previewText,
               fileUri: historyFile.uri,
               fileName: historyItem.dataName,
-              fileSize: historyItem.size || text.length,
+              fileSize: textBytes.byteLength,
+              textLength: text.length,
               profileHash: historyItem.profileHash,
               localClipboardHash: historyItem.profileHash, // 文本类型，两者相同
               hasData: true,
@@ -124,7 +181,7 @@ export class LocalClipboard {
         return {
           type: 'Text',
           text: historyItem.text || text,
-          fileSize: historyItem.size || text.length,
+          textLength: text.length,
           profileHash: historyItem.profileHash,
           localClipboardHash: historyItem.profileHash,
           hasData: false,
@@ -145,10 +202,15 @@ export class LocalClipboard {
         const fileName = `${profileHash}.txt`;
         const tempFile = new FileSystem.File(prepareTempFilePath(fileName));
 
-        // 检查文件是否已存在
-        if (!tempFile.exists) {
-          // 文件不存在，保存完整文本到文件
-          tempFile.write(new TextEncoder().encode(text));
+        const matchesFullText = await this.matchesTextFile(
+          tempFile,
+          text,
+          profileHash,
+          textBytes.byteLength
+        );
+        if (!matchesFullText) {
+          tempFile.write(textBytes);
+          this.rememberTextFile(tempFile, profileHash, textBytes.byteLength);
           console.log(`[ClipboardManager] Text saved to file: ${fileName}, length: ${text.length}`);
         } else {
           // 文件已存在，直接使用
@@ -168,7 +230,8 @@ export class LocalClipboard {
           text: previewText, // 只保存预览文本在内存中
           fileUri: tempFile.uri, // 文件路径
           fileName: fileName,
-          fileSize: text.length,
+          fileSize: textBytes.byteLength,
+          textLength: text.length,
           profileHash,
           localClipboardHash: profileHash, // 文本类型，profileHash 和 localClipboardHash 相同
           hasData: true, // 标记有外部文件
@@ -184,7 +247,7 @@ export class LocalClipboard {
     return {
       type: 'Text',
       text,
-      fileSize: text.length, // 设置文字数量
+      textLength: text.length,
       profileHash,
       localClipboardHash: profileHash,
       hasData: false, // 短文本没有外部文件
@@ -249,7 +312,6 @@ export class LocalClipboard {
 
       if (historyItem && historyItem.hasData && historyItem.dataName) {
         // 从历史记录中获取文件路径
-        const { getHistoryFileUri } = await import('@/utils/fileStorage');
         const historyFileUri = await getHistoryFileUri(
           'Image',
           historyItem.profileHash,

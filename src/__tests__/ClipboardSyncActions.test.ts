@@ -62,7 +62,12 @@ jest.mock('../services/clipboard/LocalClipboard', () => ({
   },
 }));
 
-import { downloadRemoteClipboard, setRemoteClipboard } from '../services/sync/ClipboardSyncActions';
+import {
+  downloadRemoteClipboard,
+  setRemoteClipboard,
+  setLocalClipboardFromRemote,
+} from '../services/sync/ClipboardSyncActions';
+import { localClipboard } from '../services/clipboard/LocalClipboard';
 import { configService } from '../services/ConfigService';
 import { networkAutoSwitchService } from '../services/NetworkAutoSwitchService';
 import { remoteClipboardMonitor } from '../services/sync/RemoteClipboardMonitor';
@@ -120,5 +125,24 @@ describe('downloadRemoteClipboard', () => {
       expect.any(Function),
       expect.any(AbortSignal)
     );
+  });
+
+  it('手动复制字符大小未知的远端文本时先下载完整文件', async () => {
+    const remote: ClipboardContent = {
+      type: 'Text',
+      text: 'preview',
+      hasData: true,
+      fileName: 'full.txt',
+      profileHash: 'remote-text',
+    };
+    const downloaded = { ...remote, fileUri: 'file:///full.txt' };
+    mockDownloadData.mockResolvedValue(downloaded);
+    await setLocalClipboardFromRemote(undefined, undefined, remote);
+    expect(mockDownloadData).toHaveBeenCalledWith(
+      remote,
+      expect.any(Function),
+      expect.any(AbortSignal)
+    );
+    expect(localClipboard.setClipboardContent).toHaveBeenCalledWith(downloaded, true);
   });
 });

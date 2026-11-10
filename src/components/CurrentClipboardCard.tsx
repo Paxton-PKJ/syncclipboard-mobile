@@ -23,8 +23,13 @@ import { openFile, shareFile, saveToGallery } from '@/utils/fileActions';
 import { formatFileSize, formatSizeWithType, isTextInvalid } from '@/utils';
 import { saveContentDataToDirectory } from '@/utils/clipboard/clipboardContentUtils';
 import * as FileSystem from 'expo-file-system/legacy';
-import type { ProgressInfo } from 'native-util';
+import { type ProgressInfo } from 'native-util';
 import { ClipboardTypeIcon } from './ClipboardTypeIcon';
+import { ClipboardDragSource, type ClipboardDragItem } from './ClipboardDragSource';
+
+// 原生文件拖拽要求无 authority 的绝对 file URI，支持 file:/ 和 file:///。
+const isLocalDragFileUri = (uri?: string): uri is string =>
+  !!uri && /^file:\/(?:\/\/)?[^/]/.test(uri);
 
 interface DownloadProgress {
   progress: number;
@@ -62,8 +67,73 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
 
   // 保存操作状态
   const [isSaving, setIsSaving] = useState(false);
+  const [loadedImageIdentity, setLoadedImageIdentity] = useState<string | null>(null);
   const [saveProgress, setSaveProgress] = useState<ProgressInfo | null>(null);
   const saveAbortControllerRef = useRef<AbortController | null>(null);
+  const imageIdentity = JSON.stringify([
+    clipboard?.type,
+    clipboard?.fileUri,
+    clipboard?.fileSize,
+    clipboard?.localClipboardHash,
+    clipboard?.profileHash,
+  ]);
+  const currentImageIdentityRef = useRef<string | null>(imageIdentity);
+  const mountedRef = useRef(true);
+  currentImageIdentityRef.current = imageIdentity;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const remoteDragBlocked = isRemote && acting;
+  const imageDragItem = useMemo<ClipboardDragItem | null>(() => {
+    if (
+      Platform.OS !== 'android' ||
+      clipboard?.type !== 'Image' ||
+      remoteDragBlocked ||
+      !isLocalDragFileUri(clipboard.fileUri) ||
+      loadedImageIdentity !== imageIdentity
+    )
+      return null;
+    return {
+      id: clipboard.profileHash || clipboard.localClipboardHash,
+      kind: 'image',
+      fileUri: clipboard.fileUri,
+      expectedSize: clipboard.fileSize,
+    };
+  }, [
+    clipboard?.type,
+    clipboard?.fileUri,
+    clipboard?.fileSize,
+    clipboard?.profileHash,
+    clipboard?.localClipboardHash,
+    loadedImageIdentity,
+    imageIdentity,
+    remoteDragBlocked,
+  ]);
+  const textDragItem = useMemo<ClipboardDragItem | null>(() => {
+    if (clipboard?.type !== 'Text' || remoteDragBlocked) return null;
+    const id = clipboard.profileHash || clipboard.localClipboardHash;
+    if (clipboard.hasData) {
+      if (!isLocalDragFileUri(clipboard.fileUri)) return null;
+      return {
+        id,
+        kind: 'textFile',
+        fileUri: clipboard.fileUri,
+      };
+    }
+    if (!clipboard.text) return null;
+    return { id, kind: 'text', text: clipboard.text };
+  }, [
+    clipboard?.type,
+    clipboard?.hasData,
+    clipboard?.fileUri,
+    clipboard?.text,
+    clipboard?.localClipboardHash,
+    clipboard?.profileHash,
+    remoteDragBlocked,
+  ]);
 
   // 监控 clipboard 变化并强制更新
   useEffect(() => {
@@ -177,6 +247,22 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     return '';
   };
 
+  /** 标题栏大小标签；无可靠大小信息时返回 null，避免渲染空 Text。 */
+  const getSizeLabel = (): string | null => {
+    if (clipboard.type !== 'Text') {
+      return clipboard.fileSize !== undefined
+        ? formatSizeWithType(clipboard.fileSize, clipboard.type)
+        : null;
+    }
+    if (clipboard.textLength !== undefined) return formatSizeWithType(clipboard.textLength, 'Text');
+    if (clipboard.fileSize === undefined) return null;
+    // 内联文本直接以字符数展示；完整文本存于文件时展示文件字节大小
+    return clipboard.hasData
+      ? formatSizeWithType(clipboard.fileSize)
+      : formatSizeWithType(clipboard.text.length, 'Text');
+  };
+
+  const sizeLabel = getSizeLabel();
   const previewText = getPreviewText();
   const isLongText = previewText.length > 200;
 
@@ -311,6 +397,25 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     }
   };
 
+  const canDragImage = !!imageDragItem;
+  const imagePreview = clipboard.fileUri ? (
+    <Image
+      key={imageIdentity}
+      source={{ uri: clipboard.fileUri, cache: 'force-cache' }}
+      style={styles.imagePreview}
+      resizeMode="contain"
+      onError={(error) => {
+        if (mountedRef.current && currentImageIdentityRef.current === imageIdentity)
+          setLoadedImageIdentity(null);
+        console.error('[CurrentClipboardCard] Image load error:', error.nativeEvent);
+      }}
+      onLoad={() => {
+        if (mountedRef.current && currentImageIdentityRef.current === imageIdentity)
+          setLoadedImageIdentity(imageIdentity);
+      }}
+    />
+  ) : null;
+
   return (
     <View
       style={[
@@ -339,53 +444,43 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
           </View>
         </View>
 
-        {clipboard.fileSize !== undefined && (
-          <Text style={[styles.sizeLabel, { color: theme.colors.textSecondary }]}>
-            {formatSizeWithType(clipboard.fileSize, clipboard.type)}
-          </Text>
+        {sizeLabel !== null && (
+          <Text style={[styles.sizeLabel, { color: theme.colors.textSecondary }]}>{sizeLabel}</Text>
         )}
       </View>
 
       {/* 内容预览 */}
       <View style={styles.content}>
         {clipboard.type === 'Text' && (
-          <Text
-            style={[styles.previewText, { color: theme.colors.text }]}
-            numberOfLines={isLongText ? 8 : undefined}
-          >
-            {previewText}
-          </Text>
+          <ClipboardDragSource item={textDragItem} contentType="Text">
+            <Text
+              style={[styles.previewText, { color: theme.colors.text }]}
+              numberOfLines={isLongText ? 8 : undefined}
+              selectable={Platform.OS !== 'android'}
+            >
+              {previewText}
+            </Text>
+          </ClipboardDragSource>
         )}
 
         {clipboard.type === 'Image' && (
           <View style={styles.mediaPreview}>
             {clipboard.fileUri ? (
               <>
-                <Image
-                  key={`image-${clipboard.fileUri}-${clipboard.localClipboardHash?.substring(0, 12)}`}
-                  source={{
-                    uri: clipboard.fileUri,
-                    cache: 'force-cache',
-                  }}
+                <ClipboardDragSource
+                  item={imageDragItem}
+                  contentType="Image"
                   style={styles.imagePreview}
-                  resizeMode="contain"
-                  onError={(error) => {
-                    console.error('[CurrentClipboardCard] Image load error:', error.nativeEvent);
-                    console.error('[CurrentClipboardCard] File URI:', clipboard.fileUri);
-                    console.error(
-                      '[CurrentClipboardCard] Content Hash:',
-                      clipboard.localClipboardHash?.substring(0, 8)
-                    );
-                  }}
-                  onLoad={() => {
-                    console.log(
-                      '[CurrentClipboardCard] Image loaded successfully:',
-                      clipboard.fileUri,
-                      'contentHash:',
-                      clipboard.localClipboardHash?.substring(0, 8)
-                    );
-                  }}
-                />
+                  accessible
+                  accessibilityLabel={clipboard.fileName || t('clipboard.imageFileLabel')}
+                >
+                  {imagePreview}
+                </ClipboardDragSource>
+                {canDragImage && (
+                  <Text style={[styles.dragHint, { color: theme.colors.textSecondary }]}>
+                    {t('clipboard.imageDragHint')}
+                  </Text>
+                )}
               </>
             ) : (
               <View>
@@ -696,6 +791,10 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 200,
     borderRadius: 8,
+  },
+  dragHint: {
+    fontSize: 12,
+    marginTop: 8,
   },
   mediaLabel: {
     fontSize: 15,

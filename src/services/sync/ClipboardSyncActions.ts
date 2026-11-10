@@ -179,7 +179,7 @@ export async function setLocalClipboardFromRemote(
   const needsDownload =
     content.hasData &&
     content.fileName !== undefined &&
-    content.fileSize !== undefined &&
+    (content.type === 'Text' || content.fileSize !== undefined) &&
     !content.fileUri;
 
   const finalContent = needsDownload
