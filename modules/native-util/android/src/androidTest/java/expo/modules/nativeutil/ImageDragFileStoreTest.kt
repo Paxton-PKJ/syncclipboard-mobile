@@ -24,7 +24,7 @@ class ImageDragFileStoreTest {
             try {
                 ImageDragFileStore.cleanupDirectory(snapshot.file.parentFile!!, maxBytes = 0)
                 fail("An active drag must prevent exceeding the limit")
-            } catch (error: HistoryDragFailure) { assertEquals("PAYLOAD_TOO_LARGE", error.code) }
+            } catch (error: DragFailure) { assertEquals("PAYLOAD_TOO_LARGE", error.code) }
             assertTrue(snapshot.file.exists())
         } finally { ImageDragFileStore.discard(snapshot); source.delete() }
     }
@@ -52,7 +52,7 @@ class ImageDragFileStoreTest {
             try {
                 ImageDragFileStore.prepare(context, uri, expected)
                 fail("Expected $code")
-            } catch (error: HistoryDragFailure) { assertEquals(code, error.code) }
+            } catch (error: DragFailure) { assertEquals(code, error.code) }
         }
         try {
             failure(Uri.fromFile(file).toString(), file.length() + 1, "SOURCE_CHANGED")

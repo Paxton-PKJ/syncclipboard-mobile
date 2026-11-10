@@ -3,8 +3,8 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { Platform, View } from 'react-native';
 import { requireNativeViewManager } from 'expo-modules-core';
-import { HistoryGestureSurface, type HistoryGestureSurfaceHandle } from '../HistoryGestureSurface';
-import { HistoryDragSource } from '../HistoryDragSource';
+import { DragGestureSurface, type DragGestureSurfaceHandle } from '../DragGestureSurface';
+import { DragSource } from '../DragSource';
 
 jest.mock('expo-modules-core', () => ({
   requireNativeViewManager: jest.fn((_module: string, name: string) => name),
@@ -32,27 +32,24 @@ afterEach(async () => {
 it('uses named views and forwards one complete batch and gesture ID to native', async () => {
   const startDrag = jest.fn().mockResolvedValue({ started: true });
   const cancelGesture = jest.fn().mockResolvedValue(undefined);
-  const ref = React.createRef<HistoryGestureSurfaceHandle>();
+  const ref = React.createRef<DragGestureSurfaceHandle>();
   const items = [{ id: 'text', kind: 'text' as const, text: '全文🙂' }];
   await act(async () => {
     root = TestRenderer.create(
-      <HistoryGestureSurface ref={ref} gestureEpoch={3}>
-        <HistoryDragSource sourceId="text" gestureMode="select">
+      <DragGestureSurface ref={ref} gestureEpoch={3}>
+        <DragSource sourceId="text" gestureMode="select">
           <View />
-        </HistoryDragSource>
-      </HistoryGestureSurface>,
+        </DragSource>
+      </DragGestureSurface>,
       { createNodeMock: () => ({ startDrag, cancelGesture }) }
     );
   });
   expect(requireNativeViewManager).toHaveBeenCalledWith(
     'NativeUtilModule',
-    'HistoryGestureSurfaceView'
+    'DragGestureSurfaceView'
   );
-  expect(requireNativeViewManager).toHaveBeenCalledWith(
-    'NativeUtilModule',
-    'HistoryDragSourceView'
-  );
-  expect(root.root.findByType('HistoryDragSourceView').props).toMatchObject({
+  expect(requireNativeViewManager).toHaveBeenCalledWith('NativeUtilModule', 'DragSourceView');
+  expect(root.root.findByType('DragSourceView').props).toMatchObject({
     sourceId: 'text',
     gestureMode: 'select',
   });
@@ -65,18 +62,18 @@ it('uses named views and forwards one complete batch and gesture ID to native', 
 
 it('falls back to ordinary Views and an unavailable result on unsupported platforms', async () => {
   Platform.OS = 'ios';
-  const ref = React.createRef<HistoryGestureSurfaceHandle>();
+  const ref = React.createRef<DragGestureSurfaceHandle>();
   await act(async () => {
     root = TestRenderer.create(
-      <HistoryGestureSurface ref={ref} gestureEpoch={1}>
-        <HistoryDragSource sourceId="one" gestureMode="drag">
+      <DragGestureSurface ref={ref} gestureEpoch={1}>
+        <DragSource sourceId="one" gestureMode="drag">
           <View />
-        </HistoryDragSource>
-      </HistoryGestureSurface>
+        </DragSource>
+      </DragGestureSurface>
     );
   });
-  expect(root.root.findAllByType('HistoryGestureSurfaceView')).toHaveLength(0);
-  expect(root.root.findAllByType('HistoryDragSourceView')).toHaveLength(0);
+  expect(root.root.findAllByType('DragGestureSurfaceView')).toHaveLength(0);
+  expect(root.root.findAllByType('DragSourceView')).toHaveLength(0);
   await expect(ref.current?.startDrag(1, [])).resolves.toEqual({
     started: false,
     code: 'UNAVAILABLE',

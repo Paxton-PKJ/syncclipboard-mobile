@@ -94,19 +94,19 @@ class NativeUtilModule : Module() {
         OnCreate { cleanupDragCache() }
         OnActivityEntersBackground { cleanupDragCache() }
 
-        View(HistoryGestureSurfaceView::class) {
+        View(DragGestureSurfaceView::class) {
             Events("onSelectionGesture", "onDragRequested", "onDragEnded")
-            Prop("gestureEpoch") { view: HistoryGestureSurfaceView, epoch: Int -> view.gestureEpoch = epoch }
-            Prop("enabled") { view: HistoryGestureSurfaceView, enabled: Boolean -> view.gestureEnabled = enabled }
-            AsyncFunction("startDrag") { view: HistoryGestureSurfaceView, gestureId: Int, items: List<Map<String, Any?>>, promise: Promise ->
+            Prop("gestureEpoch") { view: DragGestureSurfaceView, epoch: Int -> view.gestureEpoch = epoch }
+            Prop("enabled") { view: DragGestureSurfaceView, enabled: Boolean -> view.gestureEnabled = enabled }
+            AsyncFunction("startDrag") { view: DragGestureSurfaceView, gestureId: Int, items: List<Map<String, Any?>>, promise: Promise ->
                 view.startDrag(gestureId, items, promise)
             }
-            AsyncFunction("cancelGesture") { view: HistoryGestureSurfaceView -> view.cancelGesture() }
+            AsyncFunction("cancelGesture") { view: DragGestureSurfaceView -> view.cancelGesture() }
         }
 
-        View(HistoryDragSourceView::class) {
-            Prop("sourceId") { view: HistoryDragSourceView, id: String -> view.sourceId = id }
-            Prop("gestureMode") { view: HistoryDragSourceView, mode: String -> view.gestureMode = mode }
+        View(DragSourceView::class) {
+            Prop("sourceId") { view: DragSourceView, id: String -> view.sourceId = id }
+            Prop("gestureMode") { view: DragSourceView, mode: String -> view.gestureMode = mode }
         }
 
         Events(
@@ -326,7 +326,7 @@ class NativeUtilModule : Module() {
                     }
 
                     val hashBytes = digest.digest()
-                    val hashHex = hashBytes.joinToString("") { "%02x".format(it) }.uppercase()
+                    val hashHex = hashBytes.toLowerHex().uppercase()
                     future.complete(hashHex)
                 } catch (e: Exception) {
                     cancelFlags.remove(jobId)

@@ -81,7 +81,6 @@ export function HistoryScreen() {
   );
   const {
     items,
-    gestureRevision,
     isLoading,
     error: historyError,
     loadItems,
@@ -981,12 +980,8 @@ export function HistoryScreen() {
     return result;
   }, [sortedItems]);
 
-  // 来源变化由 store 版本追踪，避免在渲染时序列化所有历史文本。
-  const gestureScopeKey = useMemo(
-    () =>
-      [gestureRevision, searchText, sortField, tabIndex, showFullImage, layout.width].join('\0'),
-    [gestureRevision, searchText, sortField, tabIndex, showFullImage, layout.width]
-  );
+  // 数据、排序、筛选与页签变化由 HistoryGestureList 比较可见条目判定；此处只提供布局作用域。
+  const gestureLayoutKey = `${showFullImage}:${layout.width}`;
 
   // 全选当前分类的项目
   const handleSelectAllInCurrentTab = useCallback(() => {
@@ -1022,7 +1017,7 @@ export function HistoryScreen() {
         <HistoryGestureList
           activeListRef={listRef}
           active={route.key === tabRoutes[tabIndex]?.key}
-          scopeKey={gestureScopeKey}
+          layoutKey={gestureLayoutKey}
           multiSelect={isMultiSelectMode}
           enterMultiSelect={enterMultiSelect}
           onRangeActive={setIsRangeSelecting}
@@ -1049,7 +1044,7 @@ export function HistoryScreen() {
       isRefreshing,
       historySyncEnabled,
       handleIncrementalSync,
-      gestureScopeKey,
+      gestureLayoutKey,
       isMultiSelectMode,
       enterMultiSelect,
       tabRoutes,

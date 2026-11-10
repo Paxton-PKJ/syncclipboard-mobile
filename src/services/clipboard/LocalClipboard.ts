@@ -28,12 +28,23 @@ export interface CopyLifecycleCallbacks {
 /**
  * 剪贴板管理器类
  */
+/** 已校验文本文件缓存的最大条目数 */
+const MAX_VERIFIED_TEXT_FILES = 32;
+
 export class LocalClipboard {
   private copyLifecycleCallbacks: CopyLifecycleCallbacks | null = null;
   private remoteCopiedCallback: ((content: ClipboardContent) => void) | null = null;
-  private verifiedTextFile?: { uri: string; hash: string; size: number; modified: number | null };
+  /** 已校验完整内容的文本文件（按 URI 索引，插入顺序即 LRU 顺序） */
+  private verifiedTextFiles = new Map<
+    string,
+    { hash: string; size: number; modified: number | null }
+  >();
 
-  /** 哈希缓存首次复用时校验完整内容；后续轮询只检查文件元数据。 */
+  /**
+   * 判断文本文件是否保存了完整的当前文本。
+   * 每个文件（URI + 修改时间）只在首次遇到时整文件比对一次；之后按元数据命中缓存，
+   * 使在多条长文本间切换的剪贴板轮询不会反复读取整个文件。
+   */
   private async matchesTextFile(
     file: FileSystem.File,
     text: string,
@@ -41,14 +52,17 @@ export class LocalClipboard {
     bytes: number
   ): Promise<boolean> {
     if (!file.exists || file.size !== bytes) return false;
-    const previous = this.verifiedTextFile;
+    const previous = this.verifiedTextFiles.get(file.uri);
     if (
-      previous?.uri === file.uri &&
-      previous.hash === hash &&
+      previous?.hash === hash &&
       previous.size === bytes &&
       previous.modified === file.modificationTime
-    )
+    ) {
+      // 刷新 LRU 顺序
+      this.verifiedTextFiles.delete(file.uri);
+      this.verifiedTextFiles.set(file.uri, previous);
       return true;
+    }
     try {
       if ((await file.text()) !== text) return false;
       this.rememberTextFile(file, hash, bytes);
@@ -59,7 +73,12 @@ export class LocalClipboard {
   }
 
   private rememberTextFile(file: FileSystem.File, hash: string, size: number): void {
-    this.verifiedTextFile = { uri: file.uri, hash, size, modified: file.modificationTime };
+    this.verifiedTextFiles.delete(file.uri);
+    this.verifiedTextFiles.set(file.uri, { hash, size, modified: file.modificationTime });
+    if (this.verifiedTextFiles.size > MAX_VERIFIED_TEXT_FILES) {
+      const oldest = this.verifiedTextFiles.keys().next().value;
+      if (oldest !== undefined) this.verifiedTextFiles.delete(oldest);
+    }
   }
 
   /**

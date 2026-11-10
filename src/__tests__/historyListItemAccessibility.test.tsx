@@ -5,7 +5,11 @@ import { Platform } from 'react-native';
 import { HistoryListItem } from '../components/HistoryListItem';
 import { createHistoryItem } from '../types/clipboard';
 
-jest.mock('native-util', () => ({ HistoryDragSource: 'HistoryDragSource' }));
+jest.mock('native-util', () => ({
+  DragSource: 'DragSource',
+  DragExclusionZone: 'DragExclusionZone',
+  isNativeDragGestureAvailable: true,
+}));
 jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 jest.mock('../hooks/useTheme', () => ({ useTheme: () => ({ theme: { colors: {} } }) }));
 jest.mock('../stores', () => ({ useSettingsStore: () => 'off' }));
@@ -70,7 +74,7 @@ it('lets Android accessibility enter multi-select and keeps copy buttons outside
     expect(onLongPress).toHaveBeenCalledWith(item);
     const copy = root!.root.findByType('Copy').parent!;
     const disabledMarker = copy.parent!;
-    expect(disabledMarker.props.gestureMode).toBe('disabled');
+    expect(disabledMarker.type).toBe('DragExclusionZone');
     await act(async () => copy.props.onPress());
     expect(onCopy).toHaveBeenCalledWith(item);
     expect(onLongPress).toHaveBeenCalledTimes(1);

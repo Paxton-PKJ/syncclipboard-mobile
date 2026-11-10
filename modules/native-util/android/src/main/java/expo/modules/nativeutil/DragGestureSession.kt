@@ -1,7 +1,7 @@
 package expo.modules.nativeutil
 
 /** 模式只在 DOWN 复制；行回收和 React 更新不会改变会话。 */
-internal class HistoryGestureSession(val id: Int, val sourceId: String, val mode: String) {
+internal class DragGestureSession(val id: Int, val sourceId: String, val mode: String) {
     var active = false
         private set
     @Volatile var cancelled = false

@@ -8,13 +8,13 @@ import type { ClipboardContent } from '../types/clipboard';
 jest.mock('native-util', () => {
   const React = jest.requireActual('react');
   return {
-    HistoryDragSource: 'HistoryDragSource',
-    HistoryGestureSurface: React.forwardRef((props: object, ref: unknown) => {
+    DragSource: 'DragSource',
+    DragGestureSurface: React.forwardRef((props: object, ref: unknown) => {
       React.useImperativeHandle(ref, () => ({
         startDrag: mockStartDrag,
         cancelGesture: mockCancelGesture,
       }));
-      return React.createElement('HistoryGestureSurface', props);
+      return React.createElement('DragGestureSurface', props);
     }),
   };
 });
@@ -22,7 +22,10 @@ jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) =>
 jest.mock('../hooks/useTheme', () => ({ useTheme: () => ({ theme: { colors: {} } }) }));
 jest.mock('../stores', () => ({ useSettingsStore: () => ({ config: {} }) }));
 jest.mock('../stores/messageStore', () => ({
-  useMessageStore: () => ({ showMessage: mockShowMessage }),
+  useMessageStore: (selector?: (state: { showMessage: unknown }) => unknown) => {
+    const state = { showMessage: mockShowMessage };
+    return selector ? selector(state) : state;
+  },
 }));
 jest.mock('../utils/fileActions', () => ({}));
 jest.mock('../utils/clipboard/clipboardContentUtils', () => ({}));
@@ -87,7 +90,7 @@ async function render(content: ClipboardContent, remote = true, acting = false) 
 
 function sources() {
   return root.root
-    .findAllByType('HistoryDragSource')
+    .findAllByType('DragSource')
     .filter(
       (node: { props: { gestureMode?: string; accessibilityHint?: string } }) =>
         node.props.gestureMode === 'drag' &&
@@ -96,8 +99,8 @@ function sources() {
 }
 
 async function requestImageDrag() {
-  const surface = root.root.findByType('HistoryGestureSurface');
-  const source = root.root.findByType('HistoryDragSource');
+  const surface = root.root.findByType('DragGestureSurface');
+  const source = root.root.findByType('DragSource');
   await act(async () =>
     surface.props.onDragRequested({
       nativeEvent: { gestureId: 7, sourceId: source.props.sourceId },
@@ -117,12 +120,12 @@ it.each([
   async (_label, remote) => {
     await render(image, remote);
     expect(sources()).toHaveLength(0);
-    const surface = root.root.findByType('HistoryGestureSurface');
+    const surface = root.root.findByType('DragGestureSurface');
     expect(surface.props.enabled).toBe(false);
     const preview = root.root.findByType(Image);
     await loadImage();
     expect(root.root.findByType(Image)).toBe(preview);
-    expect(root.root.findByType('HistoryGestureSurface')).toBe(surface);
+    expect(root.root.findByType('DragGestureSurface')).toBe(surface);
     expect(surface.props.enabled).toBe(true);
     expect(sources()).toHaveLength(1);
     expect(sources()[0].props).toMatchObject({

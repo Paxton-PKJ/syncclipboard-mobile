@@ -4,16 +4,7 @@
  */
 
 import React, { useState, forwardRef, useMemo, useEffect, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  Image,
-  TouchableOpacity,
-  Linking,
-  Platform,
-} from 'react-native';
+import { View, Text, StyleSheet, Pressable, Image, TouchableOpacity, Linking } from 'react-native';
 import { Copy, Download, Share, Link2, Scissors } from 'react-native-feather';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { StarIcon } from './StarIcon';
@@ -25,7 +16,12 @@ import { getHistoryTransferQueue } from '@/services/history/HistoryTransferQueue
 import { getProfileId, formatSizeWithType, formatFileSize } from '@/utils';
 import { useSettingsStore } from '@/stores';
 import { useTranslation } from 'react-i18next';
-import { HistoryDragSource, type ProgressInfo } from 'native-util';
+import {
+  DragExclusionZone,
+  DragSource,
+  isNativeDragGestureAvailable,
+  type ProgressInfo,
+} from 'native-util';
 import NetInfo from '@react-native-community/netinfo';
 
 const ACTION_ICON_SIZE = 15;
@@ -209,8 +205,10 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
 
     const content = (
       <Pressable
-        onLongPress={Platform.OS === 'android' ? undefined : () => onLongPress(item)}
-        accessibilityActions={Platform.OS === 'android' ? [{ name: 'longpress' }] : undefined}
+        // 原生手势 surface 可用时由其识别长按（选择/拖拽），避免与 Pressable 长按冲突；
+        // surface 不可用时回退到 Pressable 的 onLongPress。无障碍长按始终保留。
+        onLongPress={isNativeDragGestureAvailable ? undefined : () => onLongPress(item)}
+        accessibilityActions={isNativeDragGestureAvailable ? [{ name: 'longpress' }] : undefined}
         onAccessibilityAction={(event) => {
           if (event.nativeEvent.actionName === 'longpress') onLongPress(item);
         }}
@@ -314,7 +312,7 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
 
             {/* 底部信息区 */}
             <View style={styles.bottomContent}>
-              <HistoryDragSource sourceId="" gestureMode="disabled" style={styles.metaInfo}>
+              <DragExclusionZone style={styles.metaInfo}>
                 {item.size !== undefined && (
                   <Text style={[styles.metaText, { color: theme.colors.textTertiary }]}>
                     {formatSizeWithType(item.size, item.type)}
@@ -437,8 +435,8 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
                     </Text>
                   </TouchableOpacity>
                 )}
-              </HistoryDragSource>
-              <HistoryDragSource sourceId="" gestureMode="disabled" style={styles.actionsRow}>
+              </DragExclusionZone>
+              <DragExclusionZone style={styles.actionsRow}>
                 {/* 收藏按钮 */}
                 {onToggleStar && (
                   <TouchableOpacity
@@ -615,7 +613,7 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
                     )}
                   </>
                 )}
-              </HistoryDragSource>
+              </DragExclusionZone>
             </View>
 
             {/* 调试信息：profileHash */}
@@ -684,12 +682,12 @@ export const HistoryListItem = forwardRef<object, HistoryListItemProps>(
       </Pressable>
     );
     return (
-      <HistoryDragSource
+      <DragSource
         sourceId={item.profileHash}
         gestureMode={isMultiSelectMode && isSelected ? 'drag' : 'select'}
       >
         {content}
-      </HistoryDragSource>
+      </DragSource>
     );
   }
 );

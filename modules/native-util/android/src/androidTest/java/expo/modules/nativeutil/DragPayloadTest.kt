@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit
 
 /** 使用设备真实 Parcel、图片探测和 FileProvider 验证整组数据。 */
 @RunWith(AndroidJUnit4::class)
-class HistoryDragPayloadTest {
+class DragPayloadTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private fun onMain(block: () -> Unit) {
         val finished = CountDownLatch(1)
@@ -59,8 +59,8 @@ class HistoryDragPayloadTest {
                 return true
             }
         }
-        val surface = HistoryGestureSurfaceView(context, appContext)
-        val marker = HistoryDragSourceView(context, appContext).apply {
+        val surface = DragGestureSurfaceView(context, appContext)
+        val marker = DragSourceView(context, appContext).apply {
             sourceId = "static-text"
             gestureMode = "drag"
         }
@@ -81,7 +81,7 @@ class HistoryDragPayloadTest {
         }
         fun assertPendingCleared() {
             listOf("session", "lastTouch").forEach { name ->
-                val field = HistoryGestureSurfaceView::class.java.getDeclaredField(name).apply { isAccessible = true }
+                val field = DragGestureSurfaceView::class.java.getDeclaredField(name).apply { isAccessible = true }
                 assertNull("$name cleared by actual terminal event", field.get(surface))
             }
         }
@@ -141,16 +141,16 @@ class HistoryDragPayloadTest {
         }, expo.modules.core.ModuleRegistry(emptyList(), emptyList()), WeakReference(reactContext))
         val source = image("cancelled-image.png", Bitmap.CompressFormat.PNG)
         val uri = Uri.fromFile(source).toString()
-        val view = HistoryGestureSurfaceView(context, appContext)
-        val sessionField = HistoryGestureSurfaceView::class.java.getDeclaredField("session").apply { isAccessible = true }
+        val view = DragGestureSurfaceView(context, appContext)
+        val sessionField = DragGestureSurfaceView::class.java.getDeclaredField("session").apply { isAccessible = true }
         var resolved: Any? = null
         val promise = object : Promise {
             override fun resolve(value: Any?) { resolved = value }
             override fun reject(code: String, message: String?, cause: Throwable?) { fail("Unexpected rejection: $code") }
         }
-        fun session() = HistoryGestureSession(7, "image", "drag").apply { activate(); beginPreparing() }
-        fun prepared() = HistoryDragPayload.prepare(context, listOf(item("image", "image", source))) { false }
-        fun assertCancelled(current: HistoryGestureSession, result: Result<HistoryDragPayload>) {
+        fun session() = DragGestureSession(7, "image", "drag").apply { activate(); beginPreparing() }
+        fun prepared() = DragPayload.prepare(context, listOf(item("image", "image", source))) { false }
+        fun assertCancelled(current: DragGestureSession, result: Result<DragPayload>) {
             resolved = null
             view.completePreparation(current, result, promise)
             val outcome = resolved as Map<*, *>
@@ -162,7 +162,7 @@ class HistoryDragPayloadTest {
             val released = session().apply { cancel() }
             sessionField.set(view, released)
             assertCancelled(released, Result.success(prepared()))
-            assertCancelled(released, Result.failure(HistoryDragFailure("INVALID_IMAGE")))
+            assertCancelled(released, Result.failure(DragFailure("INVALID_IMAGE")))
             val old = session()
             sessionField.set(view, session())
             assertCancelled(old, Result.success(prepared()))
@@ -179,9 +179,9 @@ class HistoryDragPayloadTest {
     )
     private fun failure(code: String, items: List<Map<String, Any?>>, cancelled: () -> Boolean = { false }) {
         try {
-            HistoryDragPayload.prepare(context, items, cancelled).discard()
+            DragPayload.prepare(context, items, cancelled).discard()
             fail("Expected $code")
-        } catch (error: HistoryDragFailure) { assertEquals(code, error.code) }
+        } catch (error: DragFailure) { assertEquals(code, error.code) }
     }
     @Test
     fun testMixedOrderFullUnicodeAndReadableUris() {
@@ -189,7 +189,7 @@ class HistoryDragPayloadTest {
         val jpg = image("batch.jpg", Bitmap.CompressFormat.JPEG)
         val full = "完整🙂é\n".repeat(2000) + "TAIL_UNIQUE"
         val text = File(context.cacheDir, "full.txt").apply { writeText(full) }
-        val payload = HistoryDragPayload.prepare(context, listOf(item("png", "image", png),
+        val payload = DragPayload.prepare(context, listOf(item("png", "image", png),
             item("full", "textFile", text), mapOf("id" to "inline", "kind" to "text", "text" to "内联🙂"),
             item("jpg", "image", jpg))) { false }
         try {
@@ -226,11 +226,11 @@ class HistoryDragPayloadTest {
     @Test
     fun testLimitsNeverTruncate() {
         val boundary = "界".repeat(60000) + "ab"
-        val payload = HistoryDragPayload.prepare(context, listOf(mapOf("id" to "limit", "kind" to "text", "text" to boundary))) { false }
+        val payload = DragPayload.prepare(context, listOf(mapOf("id" to "limit", "kind" to "text", "text" to boundary))) { false }
         assertEquals(boundary, payload.clipData.getItemAt(0).text.toString())
         payload.discard()
         val ascii = "a".repeat(131072)
-        val asciiPayload = HistoryDragPayload.prepare(context, listOf(mapOf("id" to "ascii", "kind" to "text", "text" to ascii))) { false }
+        val asciiPayload = DragPayload.prepare(context, listOf(mapOf("id" to "ascii", "kind" to "text", "text" to ascii))) { false }
         assertEquals(ascii, asciiPayload.clipData.getItemAt(0).text.toString())
         val asciiParcel = Parcel.obtain()
         try {
@@ -245,7 +245,7 @@ class HistoryDragPayloadTest {
     @Test
     fun testUtf8AndParcelLimits() {
         failure("PAYLOAD_TOO_LARGE", listOf(mapOf("id" to "large", "kind" to "text", "text" to "🙂".repeat(131073))))
-        val text = File(context.cacheDir, "large.txt").apply { writeText("a".repeat(HistoryDragPayload.MAX_PARCEL_BYTES + 1)) }
+        val text = File(context.cacheDir, "large.txt").apply { writeText("a".repeat(DragPayload.MAX_PARCEL_BYTES + 1)) }
         failure("PAYLOAD_TOO_LARGE", listOf(item("file", "textFile", text)))
         failure("PAYLOAD_TOO_LARGE", List(20000) { mapOf("id" to "$it", "kind" to "text", "text" to "") })
         failure("EMPTY_SELECTION", emptyList())
@@ -256,7 +256,7 @@ class HistoryDragPayloadTest {
         fun parcelSize(count: Int): Int {
             val parcel = Parcel.obtain()
             return try {
-                val clip = ClipData(ClipDescription("History", arrayOf("text/plain")), ClipData.Item(""))
+                val clip = ClipData(ClipDescription("SyncClipboard", arrayOf("text/plain")), ClipData.Item(""))
                 repeat(count - 1) { clip.addItem(ClipData.Item("")) }
                 clip.writeToParcel(parcel, 0)
                 parcel.dataSize()
@@ -265,12 +265,12 @@ class HistoryDragPayloadTest {
         var low = 1; var high = 20000
         while (low < high) {
             val middle = (low + high + 1) / 2
-            if (parcelSize(middle) <= HistoryDragPayload.MAX_PARCEL_BYTES) low = middle else high = middle - 1
+            if (parcelSize(middle) <= DragPayload.MAX_PARCEL_BYTES) low = middle else high = middle - 1
         }
-        assertTrue(parcelSize(low) <= HistoryDragPayload.MAX_PARCEL_BYTES)
-        assertTrue(parcelSize(low + 1) > HistoryDragPayload.MAX_PARCEL_BYTES)
+        assertTrue(parcelSize(low) <= DragPayload.MAX_PARCEL_BYTES)
+        assertTrue(parcelSize(low + 1) > DragPayload.MAX_PARCEL_BYTES)
         Log.i("NativeUtilTest", "Parcel boundary: $low items=${parcelSize(low)} bytes; ${low + 1} items=${parcelSize(low + 1)} bytes")
-        HistoryDragPayload.prepare(context, List(low) { mapOf("id" to "$it", "kind" to "text", "text" to "") }) { false }.discard()
+        DragPayload.prepare(context, List(low) { mapOf("id" to "$it", "kind" to "text", "text" to "") }) { false }.discard()
         failure("PAYLOAD_TOO_LARGE", List(low + 1) { mapOf("id" to "$it", "kind" to "text", "text" to "") })
         val changed = File(context.cacheDir, "changed.txt").apply { writeText("original") }
         var checks = 0
@@ -281,18 +281,18 @@ class HistoryDragPayloadTest {
     }
     @Test
     fun testSessionFreezesModeAndOnlyPreparesOnce() {
-        val session = HistoryGestureSession(1, "origin", "select")
+        val session = DragGestureSession(1, "origin", "select")
         assertEquals("select", session.mode)
         assertTrue(session.activate())
         assertFalse(session.activate())
         assertFalse(session.beginPreparing())
-        val drag = HistoryGestureSession(2, "drag", "drag")
+        val drag = DragGestureSession(2, "drag", "drag")
         assertTrue(drag.activate())
         assertTrue(drag.beginPreparing())
         assertFalse(drag.beginPreparing())
         drag.cancel()
         assertTrue(drag.cancelled)
-        val started = HistoryGestureSession(3, "drag", "drag")
+        val started = DragGestureSession(3, "drag", "drag")
         started.activate(); started.beginPreparing(); started.started = true; started.cancel()
         assertFalse(started.cancelled)
     }
@@ -309,7 +309,7 @@ class HistoryDragPayloadTest {
             "id" to sourceId, "kind" to "textFile", "fileUri" to Uri.fromFile(file).toString(), "expectedSize" to expected
         )
         fun assertFullText(item: Map<String, Any?>, expected: String) {
-            val payload = HistoryDragPayload.prepare(context, listOf(item)) { false }
+            val payload = DragPayload.prepare(context, listOf(item)) { false }
             try {
                 val actual = payload.clipData.getItemAt(0).text.toString()
                 assertEquals(expected, actual)
@@ -344,7 +344,7 @@ class HistoryDragPayloadTest {
         val invalid = byteArrayOf(0xc3.toByte(), 0x28, 0x61)
         file.writeBytes(invalid)
         failure("INVALID_TEXT", listOf(legacy(hash(invalid), 1)))
-        val oversized = "界".repeat(HistoryDragPayload.MAX_PARCEL_BYTES + 1)
+        val oversized = "界".repeat(DragPayload.MAX_PARCEL_BYTES + 1)
         val oversizedBytes = oversized.toByteArray(Charsets.UTF_8)
         file.writeBytes(oversizedBytes)
         failure("PAYLOAD_TOO_LARGE", listOf(legacy(hash(oversizedBytes), oversized.length.toLong())))
@@ -359,7 +359,7 @@ class HistoryDragPayloadTest {
         val file = File(context.cacheDir, "remote-hash-without-size.txt").apply { writeBytes(bytes) }
         val item = mapOf<String, Any?>("id" to hash, "kind" to "textFile", "fileUri" to Uri.fromFile(file).toString())
         try {
-            val payload = HistoryDragPayload.prepare(context, listOf(item)) { false }
+            val payload = DragPayload.prepare(context, listOf(item)) { false }
             try { assertEquals(full, payload.clipData.getItemAt(0).text.toString()) } finally { payload.discard() }
             val modified = file.lastModified()
             file.writeText(full.replaceFirst("远", "错"))

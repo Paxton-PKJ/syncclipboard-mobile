@@ -4,6 +4,7 @@ import {
   extendRangeSelection,
   findHistoryDragIndex,
   historyEdgeVelocity,
+  isHistoryGestureScopeChanged,
 } from '../screens/history/historyDragSelection';
 
 const item = (id: string, overrides = {}) =>
@@ -102,4 +103,24 @@ it('finds a hit near the end of a large ordered list in logarithmic layout queri
     )
   ).toBe(9999);
   expect(getLayout.mock.calls.length).toBeLessThan(20);
+});
+
+it('invalidates the gesture scope only for source metadata, order, tab, multi-select exit or layout changes', () => {
+  const a = item('a');
+  const b = item('b');
+  const scope = { items: [a, b], active: true, multiSelect: true, layoutKey: 'w' };
+  const changed = (next: Partial<typeof scope>) =>
+    isHistoryGestureScopeChanged(scope, { ...scope, ...next });
+  expect(
+    changed({ items: [{ ...a, text: 'updated', starred: true, lastAccessed: 99, version: 2 }, b] })
+  ).toBe(false);
+  expect(changed({ items: [b, a] })).toBe(true);
+  expect(changed({ items: [a, { ...b, fileUri: 'file:///ready.txt' }] })).toBe(true);
+  expect(changed({ items: [a] })).toBe(true);
+  expect(changed({ active: false })).toBe(true);
+  expect(changed({ layoutKey: 'h' })).toBe(true);
+  expect(changed({ multiSelect: false })).toBe(true);
+  expect(
+    isHistoryGestureScopeChanged({ ...scope, multiSelect: false }, { ...scope, multiSelect: true })
+  ).toBe(false);
 });

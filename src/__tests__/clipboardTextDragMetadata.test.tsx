@@ -22,13 +22,13 @@ jest.mock('react-native', () => ({
 jest.mock('native-util', () => {
   const React = jest.requireActual('react');
   return {
-    HistoryDragSource: 'HistoryDragSource',
-    HistoryGestureSurface: React.forwardRef((props: object, ref: unknown) => {
+    DragSource: 'DragSource',
+    DragGestureSurface: React.forwardRef((props: object, ref: unknown) => {
       React.useImperativeHandle(ref, () => ({
         startDrag: mockStartDrag,
         cancelGesture: jest.fn(async () => undefined),
       }));
-      return React.createElement('HistoryGestureSurface', props);
+      return React.createElement('DragGestureSurface', props);
     }),
   };
 });
@@ -36,7 +36,10 @@ jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) =>
 jest.mock('../hooks/useTheme', () => ({ useTheme: () => ({ theme: { colors: {} } }) }));
 jest.mock('../stores', () => ({ useSettingsStore: () => ({ config: {} }) }));
 jest.mock('../stores/messageStore', () => ({
-  useMessageStore: () => ({ showMessage: jest.fn() }),
+  useMessageStore: (selector?: (state: { showMessage: unknown }) => unknown) => {
+    const state = { showMessage: jest.fn() };
+    return selector ? selector(state) : state;
+  },
 }));
 jest.mock('../utils/fileActions', () => ({}));
 jest.mock('../utils/clipboard/clipboardContentUtils', () => ({}));
@@ -88,8 +91,8 @@ function displaysCount(count: number): boolean {
 }
 
 async function requestDrag() {
-  const surface = root!.root.findByType('HistoryGestureSurface');
-  const source = root!.root.findByType('HistoryDragSource');
+  const surface = root!.root.findByType('DragGestureSurface');
+  const source = root!.root.findByType('DragSource');
   await act(async () =>
     surface.props.onDragRequested({
       nativeEvent: { gestureId: 7, sourceId: source.props.sourceId },
