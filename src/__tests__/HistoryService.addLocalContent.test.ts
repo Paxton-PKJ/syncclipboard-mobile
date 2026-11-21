@@ -1,7 +1,13 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { sha256 } from 'js-sha256';
 import { File } from 'expo-file-system';
-import { nativeCopyFile } from 'native-util';
+import { nativeCopyFile, nativeReplaceFile } from 'native-util';
 import type { ClipboardContent } from '../types/clipboard';
+import { calculateFileHash } from '@/utils/hash';
+import { getHistoryFileUri, prepareHistoryFileUri } from '@/utils/fileStorage';
 
 const mockFiles = new Map<string, Uint8Array>();
 
@@ -123,6 +129,13 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
       const bytes = mockFiles.get(srcUri);
       if (!bytes) throw new Error(`Missing source file: ${srcUri}`);
       mockFiles.set(destUri, new Uint8Array(bytes));
+    });
+
+    (nativeReplaceFile as jest.Mock).mockImplementation(async (srcUri: string, destUri: string) => {
+      const bytes = mockFiles.get(srcUri);
+      if (!bytes) throw new Error(`Missing staging file: ${srcUri}`);
+      mockFiles.set(destUri, new Uint8Array(bytes));
+      mockFiles.delete(srcUri);
     });
   });
 
@@ -260,5 +273,348 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
       localClipboardHash: groupHash,
     });
     expect(mockFiles.get(groupHist)).toEqual(zipBytes);
+  });
+
+  it('原本哈希正确的 19 字节历史正文不会被已截断的 3 字节临时源覆盖，且 setRemoteClipboard 上传完整历史副本', async () => {
+    const validText = '1234567890123456789';
+    const validBytes = encoder.encode(validText);
+    expect(validBytes.byteLength).toBe(19);
+    const truncatedBytes = encoder.encode('123');
+    expect(truncatedBytes.byteLength).toBe(3);
+
+    const validHash = sha256(validBytes).toUpperCase();
+    const fileName = `${validHash}.txt`;
+    const sourceUri = `file:///cache/temp_files/${fileName}`;
+    const historyUri = `file:///documents/clipboards/history/Text-${validHash}/${fileName}`;
+
+    mockFiles.set(historyUri, new Uint8Array(validBytes));
+    mockFiles.set(sourceUri, truncatedBytes);
+
+    let uploadedBytes: Uint8Array | undefined;
+    mockClientSetRemoteClipboard.mockImplementation(async (content: ClipboardContent) => {
+      uploadedBytes = mockFiles.get(content.fileUri!);
+    });
+
+    const saved = await historyService.addLocalContent({
+      type: 'Text',
+      text: validText,
+      hasData: true,
+      fileName,
+      fileUri: sourceUri,
+      fileSize: validBytes.byteLength,
+      profileHash: validHash,
+      localClipboardHash: validHash,
+    });
+
+    expect(saved.fileUri).toBe(historyUri);
+    expect(mockFiles.get(historyUri)).toEqual(validBytes);
+    expect(nativeCopyFile).not.toHaveBeenCalled();
+    expect(nativeReplaceFile).not.toHaveBeenCalled();
+
+    await setRemoteClipboard(
+      {
+        type: 'Text',
+        text: validText,
+        hasData: true,
+        fileName,
+        fileUri: sourceUri,
+        fileSize: validBytes.byteLength,
+        profileHash: validHash,
+        localClipboardHash: validHash,
+      },
+      new AbortController().signal
+    );
+
+    expect(uploadedBytes).toEqual(validBytes);
+    expect(mockFiles.get(historyUri)).toEqual(validBytes);
+  });
+
+  it('历史副本损坏且临时源也截断或哈希不匹配时拒绝覆盖并保留原文件', async () => {
+    const validText = '1234567890123456789';
+    const validBytes = encoder.encode(validText);
+    const validHash = sha256(validBytes).toUpperCase();
+    const fileName = `${validHash}.txt`;
+    const sourceUri = `file:///cache/temp_files/${fileName}`;
+    const historyUri = `file:///documents/clipboards/history/Text-${validHash}/${fileName}`;
+    const oldCorrupt = encoder.encode('old-corrupt');
+
+    mockFiles.set(historyUri, oldCorrupt);
+    mockFiles.set(sourceUri, encoder.encode('bad'));
+
+    await expect(
+      historyService.addLocalContent({
+        type: 'Text',
+        text: validText,
+        hasData: true,
+        fileName,
+        fileUri: sourceUri,
+        fileSize: validBytes.byteLength,
+        profileHash: validHash,
+        localClipboardHash: validHash,
+      })
+    ).rejects.toThrow();
+
+    expect(mockFiles.get(historyUri)).toEqual(oldCorrupt);
+    expect(nativeCopyFile).not.toHaveBeenCalled();
+    expect(nativeReplaceFile).not.toHaveBeenCalled();
+  });
+
+  it('修复过程中暂存副本校验失败或原子替换失败时保留旧历史文件并清理暂存文件', async () => {
+    const validText = '1234567890123456789';
+    const validBytes = encoder.encode(validText);
+    const validHash = sha256(validBytes).toUpperCase();
+    const fileName = `${validHash}.txt`;
+    const sourceUri = `file:///cache/temp_files/${fileName}`;
+    const historyUri = `file:///documents/clipboards/history/Text-${validHash}/${fileName}`;
+    const oldCorrupt = encoder.encode('old-corrupt');
+
+    mockFiles.set(historyUri, oldCorrupt);
+    mockFiles.set(sourceUri, validBytes);
+
+    // 场景 1: 复制生成的暂存副本损坏 -> 校验失败 -> 清理暂存、保留旧文件、不触发 replace
+    (nativeCopyFile as jest.Mock).mockImplementationOnce(async (_src: string, dest: string) => {
+      mockFiles.set(dest, encoder.encode('truncated-copy'));
+    });
+
+    await expect(
+      historyService.addLocalContent({
+        type: 'Text',
+        text: validText,
+        hasData: true,
+        fileName,
+        fileUri: sourceUri,
+        profileHash: validHash,
+        localClipboardHash: validHash,
+      })
+    ).rejects.toThrow();
+
+    expect(mockFiles.get(historyUri)).toEqual(oldCorrupt);
+    expect(nativeReplaceFile).not.toHaveBeenCalled();
+    expect(Array.from(mockFiles.keys()).some((k) => k.endsWith('.tmp'))).toBe(false);
+
+    // 场景 2: 暂存校验通过，但 nativeReplaceFile 失败 -> 清理暂存、保留旧文件
+    (nativeReplaceFile as jest.Mock).mockRejectedValueOnce(new Error('IO rename error'));
+
+    await expect(
+      historyService.addLocalContent({
+        type: 'Text',
+        text: validText,
+        hasData: true,
+        fileName,
+        fileUri: sourceUri,
+        profileHash: validHash,
+        localClipboardHash: validHash,
+      })
+    ).rejects.toThrow('IO rename error');
+
+    expect(mockFiles.get(historyUri)).toEqual(oldCorrupt);
+    expect(Array.from(mockFiles.keys()).some((k) => k.endsWith('.tmp'))).toBe(false);
+  });
+
+  it('File、Image、Group 在历史完好而临时源截断时均保留完整历史副本', async () => {
+    const fileBytes = encoder.encode('complete-binary-payload');
+    const fileHash = sha256(fileBytes).toUpperCase();
+    const fileProfileHash = sha256(`doc.bin|${fileHash}`).toUpperCase();
+    const fileSrc = 'file:///cache/temp_files/doc.bin';
+    const fileHist = `file:///documents/clipboards/history/File-${fileProfileHash}/doc.bin`;
+    mockFiles.set(fileHist, fileBytes);
+    mockFiles.set(fileSrc, encoder.encode('tr'));
+
+    await historyService.addLocalContent({
+      type: 'File',
+      text: 'doc.bin',
+      hasData: true,
+      fileName: 'doc.bin',
+      fileUri: fileSrc,
+      fileSize: fileBytes.byteLength,
+      profileHash: fileProfileHash,
+      localClipboardHash: fileProfileHash,
+    });
+    expect(mockFiles.get(fileHist)).toEqual(fileBytes);
+
+    const imageBytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const imageHash = sha256(imageBytes).toUpperCase();
+    const imageProfileHash = sha256(`pic.png|${imageHash}`).toUpperCase();
+    const imageSrc = 'file:///cache/.incoming_transfer/s1/pic.png';
+    const imageHist = `file:///documents/clipboards/history/Image-${imageProfileHash}/pic.png`;
+    mockFiles.set(imageHist, imageBytes);
+    mockFiles.set(imageSrc, new Uint8Array([1]));
+
+    await historyService.addLocalContent({
+      type: 'Image',
+      text: 'pic.png',
+      hasData: true,
+      fileName: 'pic.png',
+      fileUri: imageSrc,
+      fileSize: imageBytes.byteLength,
+      profileHash: imageProfileHash,
+      localClipboardHash: imageHash,
+    });
+    expect(mockFiles.get(imageHist)).toEqual(imageBytes);
+
+    const zipBytes = new Uint8Array([80, 75, 3, 4, 10, 20, 30, 40]);
+    const groupHash = 'B'.repeat(64);
+    const groupSrc = 'file:///cache/temp_files/File_2.zip';
+    const groupHist = `file:///documents/clipboards/history/Group-${groupHash}/File_2.zip`;
+    mockFiles.set(groupHist, zipBytes);
+    mockFiles.set(groupSrc, new Uint8Array([80, 75]));
+
+    await historyService.addLocalContent({
+      type: 'Group',
+      text: 'a.png\nb.png',
+      hasData: true,
+      fileName: 'File_2.zip',
+      fileUri: groupSrc,
+      fileSize: zipBytes.byteLength,
+      profileHash: groupHash,
+      localClipboardHash: groupHash,
+    });
+    expect(mockFiles.get(groupHist)).toEqual(zipBytes);
+    expect(nativeReplaceFile).not.toHaveBeenCalled();
+  });
+
+  it('在真实隔离磁盘目录中保留 19 字节正确历史文件并原子修复损坏历史文件', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'history-service-real-'));
+    const historyRoot = path.join(tempRoot, 'history');
+    const tempDir = path.join(tempRoot, 'temp');
+    fs.mkdirSync(historyRoot, { recursive: true });
+    fs.mkdirSync(tempDir, { recursive: true });
+
+    const prevFileImpl = (File as unknown as jest.Mock).getMockImplementation();
+    const prevCopyImpl = (nativeCopyFile as jest.Mock).getMockImplementation();
+    const prevReplaceImpl = (nativeReplaceFile as jest.Mock).getMockImplementation();
+    const prevCalcHashImpl = jest.mocked(calculateFileHash).getMockImplementation();
+    const prevGetHistImpl = jest.mocked(getHistoryFileUri).getMockImplementation();
+    const prevPrepHistImpl = jest.mocked(prepareHistoryFileUri).getMockImplementation();
+
+    try {
+      (File as unknown as jest.Mock).mockImplementation((uri: string) => {
+        const filePath = fileURLToPath(uri);
+        return {
+          uri,
+          get exists() {
+            return fs.existsSync(filePath);
+          },
+          get size() {
+            return fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
+          },
+          info: () =>
+            fs.existsSync(filePath)
+              ? { exists: true, size: fs.statSync(filePath).size }
+              : { exists: false, size: 0 },
+          delete: () => {
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          },
+        };
+      });
+
+      (nativeCopyFile as jest.Mock).mockImplementation(async (srcUri: string, destUri: string) => {
+        const destPath = fileURLToPath(destUri);
+        fs.mkdirSync(path.dirname(destPath), { recursive: true });
+        fs.copyFileSync(fileURLToPath(srcUri), destPath);
+      });
+
+      (nativeReplaceFile as jest.Mock).mockImplementation(
+        async (srcUri: string, destUri: string) => {
+          const destPath = fileURLToPath(destUri);
+          fs.mkdirSync(path.dirname(destPath), { recursive: true });
+          fs.renameSync(fileURLToPath(srcUri), destPath);
+        }
+      );
+
+      jest.mocked(calculateFileHash).mockImplementation(async (uri: string) => {
+        const bytes = fs.readFileSync(fileURLToPath(uri));
+        return sha256(bytes).toUpperCase();
+      });
+
+      jest
+        .mocked(getHistoryFileUri)
+        .mockImplementation(async (type: string, profileHash: string, fileName: string) => {
+          const candidate = path.join(historyRoot, `${type}-${profileHash}`, fileName);
+          return fs.existsSync(candidate) ? pathToFileURL(candidate).toString() : null;
+        });
+
+      jest
+        .mocked(prepareHistoryFileUri)
+        .mockImplementation(async (type: string, profileHash: string, fileName: string) => {
+          const candidate = path.join(historyRoot, `${type}-${profileHash}`, fileName);
+          fs.mkdirSync(path.dirname(candidate), { recursive: true });
+          return pathToFileURL(candidate).toString();
+        });
+
+      const validText = '1234567890123456789';
+      const validBytes = encoder.encode(validText);
+      const validHash = sha256(validBytes).toUpperCase();
+      const fileName = `${validHash}.txt`;
+      const histDir = path.join(historyRoot, `Text-${validHash}`);
+      fs.mkdirSync(histDir, { recursive: true });
+      const histPath = path.join(histDir, fileName);
+      const srcPath = path.join(tempDir, fileName);
+
+      // 1) 19 字节完好历史 + 3 字节截断临时源 -> 原样保留 19 字节
+      fs.writeFileSync(histPath, validBytes);
+      fs.writeFileSync(srcPath, encoder.encode('123'));
+
+      const saved = await historyService.addLocalContent({
+        type: 'Text',
+        text: validText,
+        hasData: true,
+        fileName,
+        fileUri: pathToFileURL(srcPath).toString(),
+        fileSize: validBytes.byteLength,
+        profileHash: validHash,
+        localClipboardHash: validHash,
+      });
+
+      expect(saved.fileUri).toBe(pathToFileURL(histPath).toString());
+      expect(new Uint8Array(fs.readFileSync(histPath))).toEqual(validBytes);
+
+      // 2) 历史副本损坏 -> 原子修复并清理所有 .tmp 暂存文件
+      fs.writeFileSync(histPath, encoder.encode('corrupt'));
+      fs.writeFileSync(srcPath, validBytes);
+
+      await historyService.addLocalContent({
+        type: 'Text',
+        text: validText,
+        hasData: true,
+        fileName,
+        fileUri: pathToFileURL(srcPath).toString(),
+        fileSize: validBytes.byteLength,
+        profileHash: validHash,
+        localClipboardHash: validHash,
+      });
+
+      expect(new Uint8Array(fs.readFileSync(histPath))).toEqual(validBytes);
+      expect(fs.readdirSync(histDir)).toEqual([fileName]);
+
+      // 3) 历史副本损坏且替换失败 -> 原损坏文件仍在磁盘上，且不残留 .tmp 文件
+      const staleCorrupt = encoder.encode('stale-corrupt');
+      fs.writeFileSync(histPath, staleCorrupt);
+      (nativeReplaceFile as jest.Mock).mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(
+        historyService.addLocalContent({
+          type: 'Text',
+          text: validText,
+          hasData: true,
+          fileName,
+          fileUri: pathToFileURL(srcPath).toString(),
+          fileSize: validBytes.byteLength,
+          profileHash: validHash,
+          localClipboardHash: validHash,
+        })
+      ).rejects.toThrow('disk full');
+
+      expect(new Uint8Array(fs.readFileSync(histPath))).toEqual(staleCorrupt);
+      expect(fs.readdirSync(histDir)).toEqual([fileName]);
+    } finally {
+      (File as unknown as jest.Mock).mockImplementation(prevFileImpl);
+      (nativeCopyFile as jest.Mock).mockImplementation(prevCopyImpl);
+      (nativeReplaceFile as jest.Mock).mockImplementation(prevReplaceImpl);
+      if (prevCalcHashImpl) jest.mocked(calculateFileHash).mockImplementation(prevCalcHashImpl);
+      if (prevGetHistImpl) jest.mocked(getHistoryFileUri).mockImplementation(prevGetHistImpl);
+      if (prevPrepHistImpl) jest.mocked(prepareHistoryFileUri).mockImplementation(prevPrepHistImpl);
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });

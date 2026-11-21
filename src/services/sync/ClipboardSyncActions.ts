@@ -55,13 +55,14 @@ export async function setRemoteClipboard(
 
     const savedHistory = await historyService.addLocalContent(content);
 
-    await getClientService().setRemoteClipboard(content, notify, sig);
-
-    // 上传完成后，更新 remoteContent（使用已校验/修复的持久化历史文件 URI，避免引用已清理的临时目录）
+    // 优先使用经哈希校验/原子写入后的持久化历史文件 URI，避免临时源文件被截断或随后清理
     const persistentContent =
       savedHistory?.fileUri && savedHistory.fileUri !== content.fileUri
         ? { ...content, fileUri: savedHistory.fileUri }
         : content;
+
+    await getClientService().setRemoteClipboard(persistentContent, notify, sig);
+
     clipboardSyncState.setRemoteContent(persistentContent);
 
     return true;

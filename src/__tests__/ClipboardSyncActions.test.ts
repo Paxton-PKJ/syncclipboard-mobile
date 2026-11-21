@@ -97,7 +97,7 @@ describe('setRemoteClipboard', () => {
     );
   });
 
-  it('从已校验的源 URI 上传，上传完成后再将 remoteContent 更新为持久化历史 URI', async () => {
+  it('使用经 addLocalContent 校验后的持久化历史 URI 执行上传与状态更新', async () => {
     const sourceContent: ClipboardContent = {
       type: 'Image',
       text: 'photo.png',
@@ -118,7 +118,7 @@ describe('setRemoteClipboard', () => {
     await setRemoteClipboard(sourceContent, new AbortController().signal);
 
     expect(mockSetRemoteClipboard).toHaveBeenCalledWith(
-      sourceContent,
+      { ...sourceContent, fileUri: persistedHistoryUri },
       expect.any(Function),
       expect.any(AbortSignal)
     );

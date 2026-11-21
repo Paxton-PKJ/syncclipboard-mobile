@@ -119,10 +119,23 @@ object IncomingContentParser {
         for (index in 0 until clipData.itemCount) {
             val item = clipData.getItemAt(index) ?: continue
             val uri = item.uri
+            val itemText = extractTextFromClipItem(item)
             if (uri != null) {
-                classifyUri(uri, fileUris, texts)
-            } else {
-                extractTextFromClipItem(item)?.let { texts.add(it) }
+                val isFileUri = classifyUri(uri, fileUris, texts)
+                if (itemText != null) {
+                    if (isFileUri) {
+                        texts.add(itemText)
+                    } else if (itemText.isNotBlank() && itemText != uri.toString()) {
+                        val urlIndex = texts.lastIndex
+                        if (urlIndex >= 0 && texts[urlIndex] == uri.toString()) {
+                            texts.add(urlIndex, itemText)
+                        } else {
+                            texts.add(itemText)
+                        }
+                    }
+                }
+            } else if (itemText != null) {
+                texts.add(itemText)
             }
         }
 
@@ -303,16 +316,21 @@ object IncomingContentParser {
         return name.substring(0, MAX_FILE_NAME_LENGTH)
     }
 
-    private fun classifyUri(uri: Uri, fileUris: MutableSet<Uri>, urlTexts: MutableList<String>) {
+    private fun classifyUri(
+        uri: Uri,
+        fileUris: MutableSet<Uri>,
+        urlTexts: MutableList<String>
+    ): Boolean {
         val scheme = uri.scheme?.lowercase(Locale.ROOT)
         if (scheme == ContentResolver.SCHEME_CONTENT || scheme == ContentResolver.SCHEME_FILE) {
             fileUris.add(uri)
-        } else {
-            val str = uri.toString()
-            if (str.isNotEmpty()) {
-                urlTexts.add(str)
-            }
+            return true
         }
+        val str = uri.toString()
+        if (str.isNotEmpty()) {
+            urlTexts.add(str)
+        }
+        return false
     }
 
     private fun collectUrisFromClipData(
@@ -371,9 +389,13 @@ object IncomingContentParser {
     }
 
     private fun extractTextFromClipItem(item: ClipData.Item): String? {
-        item.text?.toString()?.let { return it }
-        val html = item.htmlText ?: return null
-        return HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_COMPACT).toString()
+        val plain = item.text?.toString()
+        if (!plain.isNullOrBlank()) return plain
+        val html = item.htmlText
+        if (!html.isNullOrBlank()) {
+            return HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_COMPACT).toString()
+        }
+        return plain
     }
 
     private fun extractSingleDeclaredMime(description: ClipDescription?): String? {

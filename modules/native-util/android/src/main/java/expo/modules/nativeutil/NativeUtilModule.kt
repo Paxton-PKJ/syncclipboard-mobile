@@ -24,6 +24,9 @@ import androidx.core.content.FileProvider
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.channels.Channels
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
@@ -512,6 +515,21 @@ class NativeUtilModule : Module() {
                     }
 
                     promise.resolve(null)
+                } catch (e: Exception) {
+                    promise.reject(CopyErrorException(e.message ?: "Unknown error", e))
+                }
+            }
+        }
+
+        AsyncFunction("replaceFile") { srcUri: String, destUri: String, promise: Promise ->
+            executor.submit {
+                try {
+                    val src = File(resolveFilePath(srcUri))
+                    val dest = File(resolveFilePath(destUri))
+                    atomicReplaceFile(src, dest)
+                    promise.resolve(null)
+                } catch (e: CodedException) {
+                    promise.reject(e)
                 } catch (e: Exception) {
                     promise.reject(CopyErrorException(e.message ?: "Unknown error", e))
                 }
@@ -1338,5 +1356,34 @@ class DownloadErrorException(message: String, cause: Throwable? = null) : CodedE
 class UnexpectedResultException(type: String) : CodedException("Unexpected result type: $type")
 
 class WaitForJobException(message: String, cause: Throwable? = null) : CodedException(message, cause)
+
+internal fun atomicReplaceFile(src: File, dest: File) {
+    if (!src.exists()) {
+        throw FileNotFoundException(src.path)
+    }
+    dest.parentFile?.let { parent ->
+        if (!parent.exists()) {
+            parent.mkdirs()
+        }
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val srcPath = src.toPath()
+        val destPath = dest.toPath()
+        try {
+            Files.move(
+                srcPath,
+                destPath,
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(srcPath, destPath, StandardCopyOption.REPLACE_EXISTING)
+        }
+    } else {
+        if (!src.renameTo(dest)) {
+            throw IOException("Failed to atomically replace file: ${dest.path}")
+        }
+    }
+}
 
 class ZipErrorException(message: String, cause: Throwable? = null) : CodedException(message, cause)

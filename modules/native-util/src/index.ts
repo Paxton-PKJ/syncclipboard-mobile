@@ -87,6 +87,7 @@ export interface NativeUtilModuleType {
   waitForJob(jobId: string): Promise<string>;
   cancelJob(jobId: string): Promise<void>;
   copyFile(srcUri: string, destUri: string): Promise<void>;
+  replaceFile(srcUri: string, destUri: string): Promise<void>;
   startUploadFile(url: string, headers: Record<string, string>, fileUri: string): string;
   startDownloadFile(url: string, headers: Record<string, string>, fileUri: string): string;
   startUploadMultipart(
@@ -244,6 +245,13 @@ export async function nativeCopyFile(srcUri: string, destUri: string): Promise<v
     throw new Error('NativeUtilModule is not available on this platform');
   }
   await NativeUtilModule.copyFile(srcUri, destUri);
+}
+
+export async function nativeReplaceFile(srcUri: string, destUri: string): Promise<void> {
+  if (Platform.OS !== 'android') {
+    throw new Error('NativeUtilModule is not available on this platform');
+  }
+  await NativeUtilModule.replaceFile(srcUri, destUri);
 }
 
 export async function nativeCopyFileToDirectory(
