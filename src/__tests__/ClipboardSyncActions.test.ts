@@ -64,8 +64,10 @@ jest.mock('../services/clipboard/LocalClipboard', () => ({
 
 import { downloadRemoteClipboard, setRemoteClipboard } from '../services/sync/ClipboardSyncActions';
 import { configService } from '../services/ConfigService';
+import { historyService } from '../services/history/HistoryService';
 import { networkAutoSwitchService } from '../services/NetworkAutoSwitchService';
 import { remoteClipboardMonitor } from '../services/sync/RemoteClipboardMonitor';
+import { clipboardSyncState } from '../services/sync/SyncState';
 
 describe('setRemoteClipboard', () => {
   const localContent: ClipboardContent = {
@@ -93,6 +95,37 @@ describe('setRemoteClipboard', () => {
       expect.any(Function),
       expect.any(AbortSignal)
     );
+  });
+
+  it('从已校验的源 URI 上传，上传完成后再将 remoteContent 更新为持久化历史 URI', async () => {
+    const sourceContent: ClipboardContent = {
+      type: 'Image',
+      text: 'photo.png',
+      hasData: true,
+      fileName: 'photo.png',
+      fileUri: 'file:///cache/.incoming_transfer/session-1/photo.png',
+      fileSize: 2048,
+      profileHash: 'img-profile-hash',
+      localClipboardHash: 'img-bytes-hash',
+    };
+    const persistedHistoryUri =
+      'file:///documents/clipboards/history/Image-img-profile-hash/photo.png';
+    (historyService.addLocalContent as jest.Mock).mockResolvedValue({
+      profileHash: 'img-profile-hash',
+      fileUri: persistedHistoryUri,
+    });
+
+    await setRemoteClipboard(sourceContent, new AbortController().signal);
+
+    expect(mockSetRemoteClipboard).toHaveBeenCalledWith(
+      sourceContent,
+      expect.any(Function),
+      expect.any(AbortSignal)
+    );
+    expect(clipboardSyncState.setRemoteContent).toHaveBeenCalledWith({
+      ...sourceContent,
+      fileUri: persistedHistoryUri,
+    });
   });
 });
 

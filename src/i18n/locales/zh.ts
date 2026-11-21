@@ -649,6 +649,7 @@ const zh = {
     noServerHint: '请先在设置中配置服务器后再拖入内容',
     success: '拖入发送成功',
     failed: '发送失败',
+    mixedContentUnsupported: '暂不支持同时拖入文件和文本，请分开拖入',
   },
 
   processText: {

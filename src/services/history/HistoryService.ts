@@ -4,12 +4,19 @@
  * 同时承担发布订阅职责：管理所有变更回调，HistoryStorage 不再直接维护订阅者列表。
  */
 
+import { File } from 'expo-file-system';
 import type { HistoryItem, ClipboardContent } from '@/types/clipboard';
 import type { HistoryFilter, HistorySort } from '@/types/storage';
 import type { HistoryChangeCallback } from '@/storage/HistoryStorage';
 import { HistorySyncStatus } from '@/types/clipboard';
 import { clipboardContentToItem } from '@/utils/clipboard/convert';
 import { getHistoryFileUri, prepareHistoryFileUri } from '@/utils/fileStorage';
+import {
+  calculateFileHash,
+  calculateFileProfileHash,
+  compareHash,
+  isValidHash,
+} from '@/utils/hash';
 import { nativeCopyFile } from 'native-util';
 import { historyStorage } from '@/storage';
 
@@ -77,6 +84,12 @@ export class HistoryService {
       );
 
       if (existingUri) {
+        if (content.fileUri && content.fileUri !== existingUri) {
+          const valid = await this.isHistoryFileValid(existingUri, content);
+          if (!valid) {
+            await this.replaceHistoryFile(content.fileUri, existingUri);
+          }
+        }
         fileUri = existingUri;
       } else if (content.fileUri) {
         const destUri = await prepareHistoryFileUri(
@@ -99,6 +112,94 @@ export class HistoryService {
     });
 
     return historyStorage.addItem(historyItem);
+  }
+
+  private getFileByteSize(uri: string): number | undefined {
+    try {
+      const file = new File(uri);
+      const info = typeof file.info === 'function' ? file.info() : undefined;
+      if (info && typeof info.exists === 'boolean') {
+        if (!info.exists) return undefined;
+        return typeof info.size === 'number' && Number.isFinite(info.size)
+          ? info.size
+          : typeof file.size === 'number' && Number.isFinite(file.size)
+            ? file.size
+            : undefined;
+      }
+      if (typeof file.exists === 'boolean' && !file.exists) {
+        return undefined;
+      }
+      return typeof file.size === 'number' && Number.isFinite(file.size) ? file.size : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async isHistoryFileValid(
+    existingUri: string,
+    content: ClipboardContent
+  ): Promise<boolean> {
+    const existingSize = this.getFileByteSize(existingUri);
+    if (existingSize === undefined) {
+      return false;
+    }
+
+    const sourceSize = content.fileUri ? this.getFileByteSize(content.fileUri) : undefined;
+    const expectedSize =
+      sourceSize ??
+      (typeof content.fileSize === 'number' && Number.isFinite(content.fileSize)
+        ? content.fileSize
+        : undefined);
+    if (expectedSize !== undefined && existingSize !== expectedSize) {
+      return false;
+    }
+
+    try {
+      if (content.type === 'Text' && content.profileHash && isValidHash(content.profileHash)) {
+        const existingHash = await calculateFileHash(existingUri);
+        return compareHash(existingHash, content.profileHash);
+      }
+      if (
+        content.type === 'Image' &&
+        content.localClipboardHash &&
+        isValidHash(content.localClipboardHash)
+      ) {
+        const existingHash = await calculateFileHash(existingUri);
+        return compareHash(existingHash, content.localClipboardHash);
+      }
+      if (
+        (content.type === 'Image' || content.type === 'File') &&
+        content.profileHash &&
+        isValidHash(content.profileHash)
+      ) {
+        const existingProfileHash = await calculateFileProfileHash(existingUri, content.fileName);
+        return compareHash(existingProfileHash, content.profileHash);
+      }
+      if (content.fileUri) {
+        const [existingHash, sourceHash] = await Promise.all([
+          calculateFileHash(existingUri),
+          calculateFileHash(content.fileUri),
+        ]);
+        return compareHash(existingHash, sourceHash);
+      }
+      return true;
+    } catch (error) {
+      console.warn('[HistoryService] Failed to validate existing history file:', error);
+      return false;
+    }
+  }
+
+  private async replaceHistoryFile(sourceUri: string, existingUri: string): Promise<void> {
+    try {
+      const existingFile = new File(existingUri);
+      const exists = typeof existingFile.exists === 'boolean' ? existingFile.exists : true;
+      if (exists && typeof existingFile.delete === 'function') {
+        existingFile.delete();
+      }
+    } catch {
+      // 忽略删除失败，交由后续覆盖复制尝试修复
+    }
+    await nativeCopyFile(sourceUri, existingUri);
   }
 
   addItems(items: HistoryItem[]): Promise<void> {

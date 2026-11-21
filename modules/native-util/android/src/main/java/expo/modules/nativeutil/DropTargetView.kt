@@ -93,6 +93,16 @@ class DropTargetView(context: Context, appContext: AppContext) : ExpoView(contex
                 if (source.kind == ParsedIncomingSource.Kind.EMPTY) {
                     return false
                 }
+                if (source.kind == ParsedIncomingSource.Kind.UNSUPPORTED_MIXED) {
+                    onDropReceived(
+                        IncomingSessionMeta(
+                            sessionId = "",
+                            kind = IncomingContentImportManager.KIND_UNSUPPORTED_MIXED,
+                            itemCount = 0
+                        ).toMap()
+                    )
+                    return false
+                }
 
                 val permissions = if (
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
