@@ -1,5 +1,8 @@
 import { Platform } from 'react-native';
 import { requireNativeModule, type EventSubscription } from 'expo-modules-core';
+import type { IncomingSessionMeta } from './DropTarget';
+
+export * from './DropTarget';
 
 export interface HashProgressEvent {
   progress: number;
@@ -108,6 +111,10 @@ export interface NativeUtilModuleType {
     destDirPath: string
   ): Promise<{ width: number; height: number; filePath: string; mimeType: string } | null>;
   setClipboardImageFromFile(fileUri: string): Promise<boolean>;
+  awaitIncomingSession(sessionId: string): Promise<IncomingSessionPayload>;
+  cancelIncomingSession(sessionId: string): void;
+  cleanupIncomingSession(sessionId: string): void;
+  getActiveShareSession(): IncomingSessionMeta | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   addListener(eventName: string, listener: (event: any) => void): EventSubscription;
 }
@@ -656,4 +663,112 @@ export async function nativeDownloadFile(
     signal?.removeEventListener('abort', abortHandler);
     progressSub?.remove();
   }
+}
+
+export interface StagedIncomingFile {
+  uri: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+}
+
+export interface IncomingSessionPayload {
+  sessionId: string;
+  type: 'text' | 'file' | 'multiple';
+  text?: string;
+  file?: StagedIncomingFile;
+  files?: StagedIncomingFile[];
+  mimeType?: string;
+}
+
+export interface IncomingSessionProgressEvent {
+  sessionId: string;
+  currentFile: number;
+  totalFiles: number;
+  bytesCopied: number;
+  totalBytes: number;
+}
+
+function createIncomingAbortError(message = 'Operation was aborted'): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+export async function awaitIncomingSession(
+  sessionId: string,
+  signal?: AbortSignal,
+  onProgress?: (event: IncomingSessionProgressEvent) => void
+): Promise<IncomingSessionPayload> {
+  if (Platform.OS !== 'android') {
+    throw new Error('NativeUtilModule is not available on this platform');
+  }
+  if (!sessionId) {
+    throw new Error('Incoming session ID is empty');
+  }
+  if (signal?.aborted) {
+    NativeUtilModule.cancelIncomingSession(sessionId);
+    throw createIncomingAbortError('Incoming session aborted');
+  }
+
+  let progressSub: EventSubscription | null = null;
+  if (onProgress) {
+    progressSub = NativeUtilModule.addListener(
+      'onIncomingSessionProgress',
+      (event: IncomingSessionProgressEvent) => {
+        if (event.sessionId === sessionId) {
+          onProgress(event);
+        }
+      }
+    );
+  }
+
+  const abortHandler = () => {
+    NativeUtilModule.cancelIncomingSession(sessionId);
+  };
+  signal?.addEventListener('abort', abortHandler);
+
+  try {
+    const result = await NativeUtilModule.awaitIncomingSession(sessionId);
+    if (signal?.aborted) {
+      throw createIncomingAbortError();
+    }
+    return result;
+  } catch (error) {
+    if (
+      signal?.aborted ||
+      (error instanceof Error &&
+        ((error as { code?: string }).code === 'CANCELLED' ||
+          (error as { code?: string }).code === 'ERR_CANCELLED' ||
+          error.message === 'Operation was cancelled'))
+    ) {
+      throw createIncomingAbortError();
+    }
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', abortHandler);
+    progressSub?.remove();
+  }
+}
+
+export function cancelIncomingSession(sessionId: string): void {
+  if (Platform.OS !== 'android' || !sessionId) return;
+  NativeUtilModule.cancelIncomingSession(sessionId);
+}
+
+export function cleanupIncomingSession(sessionId: string): void {
+  if (Platform.OS !== 'android' || !sessionId) return;
+  NativeUtilModule.cleanupIncomingSession(sessionId);
+}
+
+export function getActiveShareSession(): IncomingSessionMeta | null {
+  if (Platform.OS !== 'android') return null;
+  return NativeUtilModule.getActiveShareSession();
+}
+
+export function addIncomingShareSessionListener(
+  listener: (session: IncomingSessionMeta) => void
+): EventSubscription | null {
+  if (Platform.OS !== 'android') return null;
+  return NativeUtilModule.addListener('onIncomingShareSession', listener);
 }

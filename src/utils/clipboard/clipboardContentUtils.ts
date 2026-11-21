@@ -38,6 +38,8 @@ export interface CreateContentFromFileOptions {
   signal?: AbortSignal;
   /** 多文件处理时的文件级别进度回调 */
   onProgress?: (info: FileProgressInfo) => void;
+  /** 当源文件已位于本应用隔离暂存目录时跳过再次复制到 temp_files */
+  skipTempCopy?: boolean;
 }
 
 export async function createContentFromFile(
@@ -48,23 +50,27 @@ export async function createContentFromFile(
   options?: CreateContentFromFileOptions
 ): Promise<ClipboardContent> {
   const contentType: ClipboardContentType = guessContentType(mimeType);
-  const tempPath = prepareTempFilePath(fileName);
   const sourceFile = new File(sourceUri);
+  let targetUri = sourceFile.uri;
 
-  await nativeCopyFile(sourceFile.uri, tempPath);
+  if (!options?.skipTempCopy) {
+    const tempPath = prepareTempFilePath(fileName);
+    await nativeCopyFile(sourceFile.uri, tempPath);
+    targetUri = tempPath;
+  }
 
-  const profileHash = await calculateFileProfileHash(tempPath, fileName, options?.signal);
-  const resolvedSize = fileSize ?? sourceFile.size;
+  const profileHash = await calculateFileProfileHash(targetUri, fileName, options?.signal);
+  const resolvedSize = fileSize ?? sourceFile.info()?.size ?? sourceFile.size;
 
   return {
     type: contentType,
     text: fileName,
-    fileUri: tempPath,
+    fileUri: targetUri,
     fileName,
     fileSize: resolvedSize,
     profileHash,
     localClipboardHash:
-      contentType === 'Image' ? await calculateFileHash(tempPath, options?.signal) : profileHash,
+      contentType === 'Image' ? await calculateFileHash(targetUri, options?.signal) : profileHash,
     hasData: true,
     timestamp: Date.now(),
   };
