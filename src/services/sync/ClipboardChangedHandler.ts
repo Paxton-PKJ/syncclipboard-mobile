@@ -179,6 +179,13 @@ class ClipboardChangedHandler {
       }
       return { action: 'downloadWithLimit', maxBytes: autoDownloadMaxSize };
     }
+    if (
+      content.type === 'Text' &&
+      Number.isFinite(autoDownloadMaxSize) &&
+      autoDownloadMaxSize > 0
+    ) {
+      return { action: 'downloadWithLimit', maxBytes: autoDownloadMaxSize };
+    }
     return { action: 'skip', reason: 'Content byte size unknown' };
   }
 
