@@ -351,6 +351,22 @@ class DragPayloadTest {
     }
 
     @Test
+    fun testLegacyStorageTextHashRequiresMatchingNameAndFullContent() {
+        val text = "完整正文🙂"
+        val file = File(context.cacheDir, "旧记录.txt").apply { writeText(text) }
+        fun digest(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).toLowerHex().uppercase()
+        val legacyId = digest("${file.name}|${digest(text)}")
+        val entry = item(legacyId, "textFile", file)
+        try {
+            val payload = DragPayload.prepare(context, listOf(entry)) { false }
+            try { assertEquals(text, payload.clipData.getItemAt(0).text.toString()) } finally { payload.discard() }
+            failure("SOURCE_CHANGED", listOf(item(digest("other.txt|${digest(text)}"), "textFile", file)))
+            file.writeText("不同正文🙂")
+            failure("SOURCE_CHANGED", listOf(entry))
+        } finally { file.delete() }
+    }
+
+    @Test
     fun testTextFileWithoutSizeMetadataVerifiesTheCompleteUnicodeContentHash() {
         val full = "远端中文🙂é\n".repeat(3000) + "COMPLETE_TAIL"
         val bytes = full.toByteArray(Charsets.UTF_8)

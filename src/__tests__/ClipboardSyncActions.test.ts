@@ -1,3 +1,5 @@
+import { File } from 'expo-file-system';
+import { DownloadSizeLimitExceededError } from '../errors';
 import type { ClipboardContent } from '../types/clipboard';
 
 const mockDownloadData = jest.fn();
@@ -144,6 +146,25 @@ describe('downloadRemoteClipboard', () => {
       expect.any(AbortSignal)
     );
     expect(localClipboard.setClipboardContent).toHaveBeenCalledWith(downloaded, true);
+  });
+
+  it('自动下载复用手动下载时保留手动操作，仅向限额调用者报告超限', async () => {
+    const result = { ...remoteContent, fileUri: 'file:///remote.png' };
+    let complete!: (value: ClipboardContent) => void;
+    const transfer = new Promise<ClipboardContent>((resolve) => {
+      complete = resolve;
+    });
+    mockDownloadData.mockReturnValueOnce(transfer);
+    jest.mocked(File).mockImplementationOnce(() => ({ exists: true, size: 12 }) as File);
+    const manual = downloadRemoteClipboard(remoteContent);
+    await Promise.resolve();
+    const limited = downloadRemoteClipboard(remoteContent, undefined, undefined, { maxBytes: 10 });
+    await Promise.resolve();
+    complete(result);
+    await expect(manual).resolves.toEqual(result);
+    await expect(limited).rejects.toThrow(DownloadSizeLimitExceededError);
+    expect(mockDownloadData).toHaveBeenCalledTimes(1);
+    expect(mockDownloadData.mock.calls[0][2].aborted).toBe(false);
   });
 
   it('将 maxBytes 硬上限透传给底层下载，且手动无上限下载不会复用有上限的进行中下载', async () => {
