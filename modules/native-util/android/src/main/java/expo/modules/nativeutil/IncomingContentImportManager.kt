@@ -27,7 +27,7 @@ data class IncomingSessionMeta(
     val itemCount: Int,
     val previewText: String? = null
 ) {
-    fun toMap(): Map<String, Any?> = buildMap {
+    fun toMap(): Map<String, Any> = buildMap {
         put("sessionId", sessionId)
         put("kind", kind)
         put("itemCount", itemCount)
