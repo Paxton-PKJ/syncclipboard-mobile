@@ -394,7 +394,8 @@ export class SyncClipboardClient extends APIClient implements ISyncClipboardAPI,
     profileId: string,
     destinationUri: string,
     signal?: AbortSignal,
-    onProgress?: (info: ProgressInfo) => void
+    onProgress?: (info: ProgressInfo) => void,
+    maxBytes?: number
   ): Promise<string> {
     if (!profileId) {
       throw new ValidationError('Profile ID is required');
@@ -412,7 +413,11 @@ export class SyncClipboardClient extends APIClient implements ISyncClipboardAPI,
 
       console.log(`[SyncClipboardClient] Downloading data: ${profileId}`);
 
-      await nativeDownloadFile(url, headers, destinationUri, signal, onProgress);
+      if (maxBytes !== undefined) {
+        await nativeDownloadFile(url, headers, destinationUri, signal, onProgress, maxBytes);
+      } else {
+        await nativeDownloadFile(url, headers, destinationUri, signal, onProgress);
+      }
 
       console.log(`[SyncClipboardClient] Data downloaded successfully: ${profileId}`);
       return destinationUri;

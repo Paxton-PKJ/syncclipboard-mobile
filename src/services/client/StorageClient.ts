@@ -9,13 +9,15 @@ import { calculateFileHash, calculateFileProfileHash } from '@/utils/hash';
 import { ISyncClipboardAPI, type DownloadProgressCallback } from '@/api/clients/APIClient';
 import { HistorySyncStatus } from '@/types/clipboard';
 import { File } from 'expo-file-system';
+import { isDownloadSizeLimitExceededError } from '@/errors';
 
 async function downloadAndAddToHistory(
   content: ClipboardContent,
   apiClient: ISyncClipboardAPI,
   hasData: boolean,
   signal?: AbortSignal,
-  onProgress?: DownloadProgressCallback
+  onProgress?: DownloadProgressCallback,
+  maxBytes?: number
 ): Promise<ClipboardContent> {
   const needsDownload = hasData && content.fileName;
 
@@ -40,7 +42,10 @@ async function downloadAndAddToHistory(
   if (!fileUri) {
     const fileName = content.fileName || 'data';
     const destUri = prepareTempFilePath(fileName);
-    fileUri = await apiClient.downloadFile(fileName, destUri, signal, onProgress);
+    fileUri =
+      maxBytes !== undefined
+        ? await apiClient.downloadFile(fileName, destUri, signal, onProgress, maxBytes)
+        : await apiClient.downloadFile(fileName, destUri, signal, onProgress);
   }
 
   // 如果 profileHash 为空，下载完成后重新计算
@@ -85,7 +90,8 @@ async function downloadAndAddToHistory(
 export async function downloadForStorage(
   remoteContent: ClipboardContent,
   progress?: ProgressCallback,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  maxBytes?: number
 ): Promise<ClipboardContent> {
   try {
     const apiClient = await getAPIClient();
@@ -102,10 +108,14 @@ export async function downloadForStorage(
             totalBytes: info.totalBytes,
           });
         }
-      }
+      },
+      maxBytes
     );
     return updatedContent;
   } catch (error) {
+    if (isDownloadSizeLimitExceededError(error)) {
+      throw error;
+    }
     const err = error as Error;
     const msg = err?.message?.toLowerCase() ?? '';
     if (err?.name === 'AbortError' || msg.includes('abort') || msg.includes('cancel')) {

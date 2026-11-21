@@ -154,7 +154,8 @@ export class S3Client implements ISyncClipboardAPI {
     fileName: string,
     destinationUri: string,
     signal?: AbortSignal,
-    onProgress?: DownloadProgressCallback
+    onProgress?: DownloadProgressCallback,
+    maxBytes?: number
   ): Promise<string> {
     if (!fileName) throw new ValidationError('File name is required');
     if (!destinationUri) throw new ValidationError('Destination URI is required');
@@ -166,7 +167,11 @@ export class S3Client implements ISyncClipboardAPI {
     try {
       const headers = this.signRequest('GET', path, {}, '', signal);
       console.log(`[S3Client] Downloading file ${fileName} to ${destinationUri}`);
-      await nativeDownloadFile(url, headers, destinationUri, signal, onProgress);
+      if (maxBytes !== undefined) {
+        await nativeDownloadFile(url, headers, destinationUri, signal, onProgress, maxBytes);
+      } else {
+        await nativeDownloadFile(url, headers, destinationUri, signal, onProgress);
+      }
       console.log(`[S3Client] File downloaded successfully: ${fileName}`);
       return destinationUri;
     } catch (error) {

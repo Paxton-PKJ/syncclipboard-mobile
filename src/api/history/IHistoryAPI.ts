@@ -28,7 +28,8 @@ export interface IHistoryAPI {
     profileId: string,
     destinationUri: string,
     signal?: AbortSignal,
-    onProgress?: (info: ProgressInfo) => void
+    onProgress?: (info: ProgressInfo) => void,
+    maxBytes?: number
   ): Promise<string>;
   uploadRecord(
     record: HistoryRecordDto,

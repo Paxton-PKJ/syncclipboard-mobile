@@ -4,7 +4,12 @@
  */
 
 import type { IHistoryAPI } from '@/api/history';
-import { HistoryAPINotInitializedError, RecordNotFoundError } from '@/errors';
+import {
+  DownloadSizeLimitExceededError,
+  HistoryAPINotInitializedError,
+  RecordNotFoundError,
+  isDownloadSizeLimitExceededError,
+} from '@/errors';
 import { HistoryStorage } from '../../storage/HistoryStorage';
 import { HistorySyncStatus, type ClipboardContent, isLocalFileReady } from '@/types/clipboard';
 import { getHistoryFileDir } from '@/utils/fileStorage';
@@ -41,6 +46,7 @@ export interface TransferTask {
   abortController: AbortController;
   userCancelled?: boolean;
   isImmediateTask?: boolean;
+  maxBytes?: number;
   externalProgressReporter?: ProgressCallback;
   awaiter: Promise<ClipboardContent>;
 }
@@ -69,7 +75,7 @@ export class HistoryTransferQueue {
   private activeTasks: Map<string, TransferTask> = new Map();
   private taskStatusCallbacks: Set<TaskStatusChangedCallback> = new Set();
   private taskCompletionResolvers: Map<
-    string,
+    TransferTask,
     { resolve: (content: ClipboardContent) => void; reject: (error: Error) => void }
   > = new Map();
 
@@ -176,7 +182,6 @@ export class HistoryTransferQueue {
     const item = parsed ? await this.historyStorage.getItem(parsed.hash) : null;
     const displayName = item?.text || profileId;
 
-    const key = this.getTaskKey(profileId, 'download');
     let resolveAwaiter: (content: ClipboardContent) => void;
     let rejectAwaiter: (error: Error) => void;
     const awaiter = new Promise<ClipboardContent>((resolve, reject) => {
@@ -197,7 +202,7 @@ export class HistoryTransferQueue {
       awaiter,
     };
 
-    this.taskCompletionResolvers.set(key, { resolve: resolveAwaiter!, reject: rejectAwaiter! });
+    this.taskCompletionResolvers.set(task, { resolve: resolveAwaiter!, reject: rejectAwaiter! });
     this.pendingTasks.push(task);
     this.notifyStatusChanged(task);
     this.signalQueue();
@@ -219,7 +224,6 @@ export class HistoryTransferQueue {
     const item = parsed ? await this.historyStorage.getItem(parsed.hash) : null;
     const displayName = item?.text || profileId;
 
-    const key = this.getTaskKey(profileId, 'upload');
     let resolveAwaiter: (content: ClipboardContent) => void;
     let rejectAwaiter: (error: Error) => void;
     const awaiter = new Promise<ClipboardContent>((resolve, reject) => {
@@ -240,7 +244,7 @@ export class HistoryTransferQueue {
       awaiter,
     };
 
-    this.taskCompletionResolvers.set(key, { resolve: resolveAwaiter!, reject: rejectAwaiter! });
+    this.taskCompletionResolvers.set(task, { resolve: resolveAwaiter!, reject: rejectAwaiter! });
     this.pendingTasks.push(task);
     this.notifyStatusChanged(task);
     this.signalQueue();
@@ -255,18 +259,26 @@ export class HistoryTransferQueue {
   async executeImmediateDownload(
     content: ClipboardContent,
     progress?: ProgressCallback,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    maxBytes?: number
   ): Promise<ClipboardContent> {
     const profileId = getProfileId(content.type, content.profileHash!);
 
     const existingTask = this.findTask(profileId, 'download');
 
     if (existingTask) {
-      existingTask.isImmediateTask = true;
-      if (progress) {
-        existingTask.externalProgressReporter = progress;
+      if (
+        existingTask.maxBytes !== undefined &&
+        (maxBytes === undefined || maxBytes > existingTask.maxBytes)
+      ) {
+        this.cancelTask(profileId, 'download');
+      } else {
+        existingTask.isImmediateTask = true;
+        if (progress) {
+          existingTask.externalProgressReporter = progress;
+        }
+        return existingTask.awaiter;
       }
-      return existingTask.awaiter;
     }
 
     const parsed = parseProfileId(profileId);
@@ -280,6 +292,7 @@ export class HistoryTransferQueue {
       resolveAwaiter = resolve;
       rejectAwaiter = reject;
     });
+    awaiter.catch(() => {});
 
     const abortController = new AbortController();
     if (signal) {
@@ -301,11 +314,12 @@ export class HistoryTransferQueue {
       failureCount: 0,
       abortController,
       isImmediateTask: true,
+      maxBytes,
       externalProgressReporter: progress,
       awaiter,
     };
 
-    this.taskCompletionResolvers.set(key, { resolve: resolveAwaiter!, reject: rejectAwaiter! });
+    this.taskCompletionResolvers.set(task, { resolve: resolveAwaiter!, reject: rejectAwaiter! });
     this.activeTasks.set(key, task);
     this.notifyStatusChanged(task);
 
@@ -351,6 +365,7 @@ export class HistoryTransferQueue {
       resolveAwaiter = resolve;
       rejectAwaiter = reject;
     });
+    awaiter.catch(() => {});
 
     const abortController = new AbortController();
     if (signal) {
@@ -376,7 +391,7 @@ export class HistoryTransferQueue {
       awaiter,
     };
 
-    this.taskCompletionResolvers.set(key, { resolve: resolveAwaiter!, reject: rejectAwaiter! });
+    this.taskCompletionResolvers.set(task, { resolve: resolveAwaiter!, reject: rejectAwaiter! });
     this.activeTasks.set(key, task);
     this.notifyStatusChanged(task);
 
@@ -409,11 +424,18 @@ export class HistoryTransferQueue {
     );
     if (pendingIndex >= 0) {
       this.pendingTasks.splice(pendingIndex, 1);
+      const resolver = this.taskCompletionResolvers.get(task);
+      if (resolver) {
+        this.taskCompletionResolvers.delete(task);
+        resolver.reject(new Error('Task cancelled'));
+      }
     }
 
     // 从活动任务移除
     const key = this.getTaskKey(profileId, type);
-    this.activeTasks.delete(key);
+    if (this.activeTasks.get(key) === task) {
+      this.activeTasks.delete(key);
+    }
 
     return true;
   }
@@ -516,6 +538,7 @@ export class HistoryTransferQueue {
     this.notifyStatusChanged(task);
 
     let resultContent: ClipboardContent | undefined;
+    let caughtError: unknown;
 
     try {
       if (task.type === 'download') {
@@ -531,7 +554,11 @@ export class HistoryTransferQueue {
 
       return resultContent;
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
+      caughtError = error;
+      if (isDownloadSizeLimitExceededError(error)) {
+        task.status = 'cancelled';
+        task.errorMessage = error instanceof Error ? error.message : 'Download size exceeds limit';
+      } else if (error instanceof Error && error.name === 'AbortError') {
         task.status = 'cancelled';
       } else if (task.userCancelled) {
         task.status = 'cancelled';
@@ -566,13 +593,21 @@ export class HistoryTransferQueue {
     } finally {
       this.notifyStatusChanged(task);
       const key = this.getTaskKey(task.profileId, task.type);
-      this.activeTasks.delete(key);
+      if (this.activeTasks.get(key) === task) {
+        this.activeTasks.delete(key);
+      }
 
-      const resolver = this.taskCompletionResolvers.get(key);
+      const resolver = this.taskCompletionResolvers.get(task);
       if (resolver) {
-        this.taskCompletionResolvers.delete(key);
+        this.taskCompletionResolvers.delete(task);
         if (task.status === 'completed' && resultContent) {
           resolver.resolve(resultContent);
+        } else if (isDownloadSizeLimitExceededError(caughtError)) {
+          resolver.reject(
+            caughtError instanceof Error
+              ? caughtError
+              : new DownloadSizeLimitExceededError(task.errorMessage)
+          );
         } else if (task.status === 'failed') {
           resolver.reject(new Error(task.errorMessage || 'Task failed'));
         } else {
@@ -626,36 +661,45 @@ export class HistoryTransferQueue {
     console.log(`[HistoryTransferQueue] Destination directory: ${historyDir.uri}`);
     console.log(`[HistoryTransferQueue] Destination file: ${destinationUri}`);
 
-    await this.historyAPI.downloadData(
-      task.profileId,
-      destinationUri,
-      task.abortController.signal,
-      (info) => {
-        task.bytesTransferred = info.bytesTransferred;
-        // 优先使用响应长度；未提供有效长度时，用历史记录的文件大小兜底。
-        const totalBytes =
-          Number.isFinite(info.totalBytes) && info.totalBytes > 0
-            ? info.totalBytes
-            : (item.size ?? 0);
-        task.totalBytes = Number.isFinite(totalBytes) && totalBytes > 0 ? totalBytes : 0;
-        task.progress =
-          task.totalBytes > 0
-            ? Math.min(
-                100,
-                Math.max(0, Math.round((info.bytesTransferred / task.totalBytes) * 100))
-              )
-            : -1;
-        this.notifyStatusChanged(task);
+    const onProgress: ProgressCallback = (info) => {
+      task.bytesTransferred = info.bytesTransferred;
+      // 优先使用响应长度；未提供有效长度时，用历史记录的文件大小兜底。
+      const totalBytes =
+        Number.isFinite(info.totalBytes) && info.totalBytes > 0
+          ? info.totalBytes
+          : (item.size ?? 0);
+      task.totalBytes = Number.isFinite(totalBytes) && totalBytes > 0 ? totalBytes : 0;
+      task.progress =
+        task.totalBytes > 0
+          ? Math.min(100, Math.max(0, Math.round((info.bytesTransferred / task.totalBytes) * 100)))
+          : -1;
+      this.notifyStatusChanged(task);
 
-        if (task.externalProgressReporter) {
-          task.externalProgressReporter({
-            progress: task.progress >= 0 ? task.progress / 100 : -1,
-            bytesTransferred: task.bytesTransferred,
-            totalBytes: task.totalBytes || 0,
-          });
-        }
+      if (task.externalProgressReporter) {
+        task.externalProgressReporter({
+          progress: task.progress >= 0 ? task.progress / 100 : -1,
+          bytesTransferred: task.bytesTransferred,
+          totalBytes: task.totalBytes || 0,
+        });
       }
-    );
+    };
+
+    if (task.maxBytes !== undefined) {
+      await this.historyAPI.downloadData(
+        task.profileId,
+        destinationUri,
+        task.abortController.signal,
+        onProgress,
+        task.maxBytes
+      );
+    } else {
+      await this.historyAPI.downloadData(
+        task.profileId,
+        destinationUri,
+        task.abortController.signal,
+        onProgress
+      );
+    }
 
     const localClipboardHash =
       item.type === 'Image'

@@ -88,7 +88,12 @@ export interface NativeUtilModuleType {
   cancelJob(jobId: string): Promise<void>;
   copyFile(srcUri: string, destUri: string): Promise<void>;
   startUploadFile(url: string, headers: Record<string, string>, fileUri: string): string;
-  startDownloadFile(url: string, headers: Record<string, string>, fileUri: string): string;
+  startDownloadFile(
+    url: string,
+    headers: Record<string, string>,
+    fileUri: string,
+    maxBytes: number
+  ): string;
   startUploadMultipart(
     url: string,
     headers: Record<string, string>,
@@ -609,7 +614,8 @@ export async function nativeDownloadFile(
   headers: Record<string, string>,
   fileUri: string,
   signal?: AbortSignal,
-  onProgress?: (info: ProgressInfo) => void
+  onProgress?: (info: ProgressInfo) => void,
+  maxBytes?: number
 ): Promise<void> {
   if (Platform.OS !== 'android') {
     throw new Error('NativeUtilModule is not available on this platform');
@@ -636,7 +642,11 @@ export async function nativeDownloadFile(
     );
   }
 
-  const jobId = NativeUtilModule.startDownloadFile(url, headers, fileUri);
+  const normalizedMaxBytes =
+    typeof maxBytes === 'number' && Number.isFinite(maxBytes) && maxBytes > 0
+      ? Math.floor(maxBytes)
+      : -1;
+  const jobId = NativeUtilModule.startDownloadFile(url, headers, fileUri, normalizedMaxBytes);
   resolvedJobId = jobId;
 
   const abortHandler = () => NativeUtilModule.cancelJob(jobId);
@@ -645,6 +655,20 @@ export async function nativeDownloadFile(
   try {
     await NativeUtilModule.waitForJob(jobId);
   } catch (error) {
+    const code =
+      error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+    if (
+      code === 'ERR_DOWNLOAD_SIZE_LIMIT_EXCEEDED' ||
+      code === 'DOWNLOAD_SIZE_LIMIT_EXCEEDED' ||
+      (error instanceof Error && error.name === 'DownloadSizeLimitExceededError')
+    ) {
+      const limitError = new Error(
+        error instanceof Error ? error.message : 'Download size exceeds limit'
+      ) as Error & { code: string };
+      limitError.name = 'DownloadSizeLimitExceededError';
+      limitError.code = 'ERR_DOWNLOAD_SIZE_LIMIT_EXCEEDED';
+      throw limitError;
+    }
     if (
       error instanceof Error &&
       ((error as { code?: string }).code === 'CANCELLED' ||

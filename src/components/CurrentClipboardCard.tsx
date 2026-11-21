@@ -247,21 +247,24 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     return '';
   };
 
-  /** 标题栏大小标签；无可靠大小信息时返回 null，避免渲染空 Text。 */
+  /** 标题栏大小标签；无可靠大小信息时返回 null，避免渲染空 Text 或误把预览长度当成全文长度。 */
   const getSizeLabel = (): string | null => {
     if (clipboard.type !== 'Text') {
       return clipboard.fileSize !== undefined
-        ? formatSizeWithType(clipboard.fileSize, clipboard.type)
+        ? formatSizeWithType(clipboard.fileSize, clipboard.type) || null
         : null;
     }
-    if (clipboard.textLength !== undefined) return formatSizeWithType(clipboard.textLength, 'Text');
-    if (clipboard.fileSize !== undefined) {
-      // 内联文本直接以字符数展示；完整文本存于文件时展示文件字节大小
-      return clipboard.hasData
-        ? formatSizeWithType(clipboard.fileSize)
-        : formatSizeWithType(clipboard.text.length, 'Text');
+    if (clipboard.textLength !== undefined && clipboard.textLength > 0) {
+      return formatSizeWithType(clipboard.textLength, 'Text') || null;
     }
-    return clipboard.text.length > 0 ? formatSizeWithType(clipboard.text.length, 'Text') : null;
+    if (clipboard.hasData) {
+      return clipboard.fileSize !== undefined && clipboard.fileSize > 0
+        ? formatSizeWithType(clipboard.fileSize) || null
+        : null;
+    }
+    return clipboard.text.length > 0
+      ? formatSizeWithType(clipboard.text.length, 'Text') || null
+      : null;
   };
 
   const sizeLabel = getSizeLabel();

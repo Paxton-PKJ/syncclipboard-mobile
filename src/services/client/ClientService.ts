@@ -21,7 +21,8 @@ export class ClientService {
   async downloadData(
     content: ClipboardContent,
     progress?: ProgressCallback,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    maxBytes?: number
   ): Promise<ClipboardContent> {
     const server = await configService.getActiveServer();
     if (!server) {
@@ -31,11 +32,17 @@ export class ClientService {
     if (server.type === 'syncclipboard') {
       const config = await configService.getConfig();
       if (!config.enableHistorySync) {
-        return downloadForStorage(content, progress, signal);
+        return maxBytes !== undefined
+          ? downloadForStorage(content, progress, signal, maxBytes)
+          : downloadForStorage(content, progress, signal);
       }
-      return downloadForSyncClipboard(content, progress, signal);
+      return maxBytes !== undefined
+        ? downloadForSyncClipboard(content, progress, signal, maxBytes)
+        : downloadForSyncClipboard(content, progress, signal);
     }
-    return downloadForStorage(content, progress, signal);
+    return maxBytes !== undefined
+      ? downloadForStorage(content, progress, signal, maxBytes)
+      : downloadForStorage(content, progress, signal);
   }
 
   async uploadData(
