@@ -1,0 +1,26 @@
+name: Package external sender for emulator review
+on:
+  push:
+    branches: [verify/drop-source-6fb9b1f]
+permissions: {contents: read}
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build disposable external drag and share source
+        working-directory: .github/drop-source
+        run: |
+          set -eu
+          jar="$ANDROID_HOME/platforms/android-35/android.jar"
+          bt="$ANDROID_HOME/build-tools/35.0.0"
+          mkdir classes dex
+          javac --release 8 -cp "$jar" -d classes *.java
+          "$bt/d8" --lib "$jar" --min-api 24 --output dex classes/test/clipboard/source/*.class
+          "$bt/aapt2" link -I "$jar" --manifest AndroidManifest.xml -o unsigned.apk
+          (cd dex && zip -q ../unsigned.apk classes.dex)
+          "$bt/zipalign" -f 4 unsigned.apk fixture.apk
+          keytool -genkeypair -alias fixture -keyalg RSA -keystore fixture.jks -storepass android -keypass android -dname CN=fixture -validity 30
+          "$bt/apksigner" sign --ks fixture.jks --ks-pass pass:android fixture.apk
+      - uses: actions/upload-artifact@v7
+        with: {name: external-drop-fixture, path: .github/drop-source/fixture.apk}
