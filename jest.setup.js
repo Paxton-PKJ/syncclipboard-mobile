@@ -90,6 +90,7 @@ jest.mock('native-util', () => ({
   isNativeHashModuleAvailable: jest.fn().mockReturnValue(false),
   nativeCalculateFileHash: jest.fn(),
   nativeCopyFile: jest.fn().mockResolvedValue(undefined),
+  nativeReplaceFile: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('@microsoft/signalr', () => ({

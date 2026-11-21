@@ -17,7 +17,7 @@ import {
   compareHash,
   isValidHash,
 } from '@/utils/hash';
-import { nativeCopyFile } from 'native-util';
+import { nativeCopyFile, nativeReplaceFile } from 'native-util';
 import { historyStorage } from '@/storage';
 
 /**
@@ -85,10 +85,7 @@ export class HistoryService {
 
       if (existingUri) {
         if (content.fileUri && content.fileUri !== existingUri) {
-          const valid = await this.isHistoryFileValid(existingUri, content);
-          if (!valid) {
-            await this.replaceHistoryFile(content.fileUri, existingUri);
-          }
+          await this.ensureValidHistoryFile(existingUri, content);
         }
         fileUri = existingUri;
       } else if (content.fileUri) {
@@ -97,7 +94,7 @@ export class HistoryService {
           content.profileHash,
           content.fileName
         );
-        await nativeCopyFile(content.fileUri, destUri);
+        await this.stageAndCommitNewHistoryFile(content.fileUri, destUri, content);
         fileUri = destUri;
       } else {
         throw new Error(
@@ -135,71 +132,213 @@ export class HistoryService {
     }
   }
 
-  private async isHistoryFileValid(
-    existingUri: string,
+  private async verifyFileAgainstRecord(
+    fileUri: string,
     content: ClipboardContent
-  ): Promise<boolean> {
-    const existingSize = this.getFileByteSize(existingUri);
-    if (existingSize === undefined) {
-      return false;
-    }
-
-    const sourceSize = content.fileUri ? this.getFileByteSize(content.fileUri) : undefined;
-    const expectedSize =
-      sourceSize ??
-      (typeof content.fileSize === 'number' && Number.isFinite(content.fileSize)
-        ? content.fileSize
-        : undefined);
-    if (expectedSize !== undefined && existingSize !== expectedSize) {
-      return false;
+  ): Promise<'valid' | 'invalid' | 'unverifiable'> {
+    const byteSize = this.getFileByteSize(fileUri);
+    if (byteSize === undefined) {
+      return 'invalid';
     }
 
     try {
-      if (content.type === 'Text' && content.profileHash && isValidHash(content.profileHash)) {
-        const existingHash = await calculateFileHash(existingUri);
-        return compareHash(existingHash, content.profileHash);
+      if (content.type === 'Text') {
+        const expectedHash =
+          content.profileHash && isValidHash(content.profileHash)
+            ? content.profileHash
+            : content.localClipboardHash && isValidHash(content.localClipboardHash)
+              ? content.localClipboardHash
+              : undefined;
+        if (!expectedHash) {
+          return 'unverifiable';
+        }
+        const actualHash = await calculateFileHash(fileUri);
+        return compareHash(actualHash, expectedHash) ? 'valid' : 'invalid';
       }
-      if (
-        content.type === 'Image' &&
-        content.localClipboardHash &&
-        isValidHash(content.localClipboardHash)
-      ) {
-        const existingHash = await calculateFileHash(existingUri);
-        return compareHash(existingHash, content.localClipboardHash);
+
+      if (content.type === 'Image') {
+        let checked = false;
+        if (content.localClipboardHash && isValidHash(content.localClipboardHash)) {
+          checked = true;
+          const actualHash = await calculateFileHash(fileUri);
+          if (!compareHash(actualHash, content.localClipboardHash)) {
+            return 'invalid';
+          }
+        }
+        if (content.profileHash && isValidHash(content.profileHash)) {
+          checked = true;
+          const actualProfileHash = await calculateFileProfileHash(fileUri, content.fileName);
+          if (!compareHash(actualProfileHash, content.profileHash)) {
+            return 'invalid';
+          }
+        }
+        return checked ? 'valid' : 'unverifiable';
       }
-      if (
-        (content.type === 'Image' || content.type === 'File') &&
-        content.profileHash &&
-        isValidHash(content.profileHash)
-      ) {
-        const existingProfileHash = await calculateFileProfileHash(existingUri, content.fileName);
-        return compareHash(existingProfileHash, content.profileHash);
+
+      if (content.type === 'File') {
+        if (content.profileHash && isValidHash(content.profileHash)) {
+          const actualProfileHash = await calculateFileProfileHash(fileUri, content.fileName);
+          return compareHash(actualProfileHash, content.profileHash) ? 'valid' : 'invalid';
+        }
+        return 'unverifiable';
       }
-      if (content.fileUri) {
-        const [existingHash, sourceHash] = await Promise.all([
-          calculateFileHash(existingUri),
-          calculateFileHash(content.fileUri),
-        ]);
-        return compareHash(existingHash, sourceHash);
-      }
-      return true;
+
+      // Group 的 profileHash 为未压缩条目的聚合哈希，无法直接从 zip 文件反推
+      return 'unverifiable';
     } catch (error) {
-      console.warn('[HistoryService] Failed to validate existing history file:', error);
-      return false;
+      console.warn('[HistoryService] Failed to verify file integrity:', error);
+      return 'invalid';
     }
   }
 
-  private async replaceHistoryFile(sourceUri: string, existingUri: string): Promise<void> {
+  private getRecordedByteSize(content: ClipboardContent): number | undefined {
+    return typeof content.fileSize === 'number' &&
+      Number.isFinite(content.fileSize) &&
+      content.fileSize >= 0
+      ? content.fileSize
+      : undefined;
+  }
+
+  private async ensureValidHistoryFile(
+    existingUri: string,
+    content: ClipboardContent
+  ): Promise<void> {
+    const existingVerdict = await this.verifyFileAgainstRecord(existingUri, content);
+    if (existingVerdict === 'valid') {
+      return;
+    }
+
+    const sourceUri = content.fileUri!;
+
+    if (existingVerdict === 'invalid') {
+      const sourceVerdict = await this.verifyFileAgainstRecord(sourceUri, content);
+      if (sourceVerdict !== 'valid') {
+        throw new Error(
+          '[HistoryService] addLocalContent: source file failed integrity validation and cannot repair history file'
+        );
+      }
+      await this.copyAndVerifyHistoryFile(sourceUri, existingUri, content);
+      return;
+    }
+
+    // 记录本身无可直接校验的文件哈希（如 Group）：参考记录字节大小，优先保留有效历史文件
+    const recordedSize = this.getRecordedByteSize(content);
+    const existingSize = this.getFileByteSize(existingUri);
+    const sourceSize = this.getFileByteSize(sourceUri);
+
+    if (sourceSize === undefined || (recordedSize !== undefined && sourceSize !== recordedSize)) {
+      if (
+        existingSize !== undefined &&
+        (recordedSize === undefined || existingSize === recordedSize)
+      ) {
+        return;
+      }
+      throw new Error(
+        '[HistoryService] addLocalContent: source file is missing or does not match expected size'
+      );
+    }
+
+    const [existingHash, sourceHash] = await Promise.all([
+      calculateFileHash(existingUri),
+      calculateFileHash(sourceUri),
+    ]);
+    if (compareHash(existingHash, sourceHash)) {
+      return;
+    }
+
+    if (recordedSize !== undefined || existingSize === undefined || existingSize === 0) {
+      await this.copyAndVerifyHistoryFile(sourceUri, existingUri, content, {
+        expectedSize: recordedSize ?? sourceSize,
+        expectedHash: sourceHash,
+      });
+    }
+  }
+
+  private async stageAndCommitNewHistoryFile(
+    sourceUri: string,
+    destUri: string,
+    content: ClipboardContent
+  ): Promise<void> {
+    const sourceVerdict = await this.verifyFileAgainstRecord(sourceUri, content);
+    if (sourceVerdict === 'invalid') {
+      throw new Error('[HistoryService] addLocalContent: source file failed integrity validation');
+    }
+
+    if (sourceVerdict === 'valid') {
+      await this.copyAndVerifyHistoryFile(sourceUri, destUri, content);
+      return;
+    }
+
+    const recordedSize = this.getRecordedByteSize(content);
+    const sourceSize = this.getFileByteSize(sourceUri);
+    if (sourceSize === undefined || (recordedSize !== undefined && sourceSize !== recordedSize)) {
+      throw new Error(
+        '[HistoryService] addLocalContent: source file is missing or does not match expected size'
+      );
+    }
+
+    const sourceHash = await calculateFileHash(sourceUri);
+    await this.copyAndVerifyHistoryFile(sourceUri, destUri, content, {
+      expectedSize: recordedSize ?? sourceSize,
+      expectedHash: sourceHash,
+    });
+  }
+
+  private createStagingUri(targetUri: string): string {
+    const lastSlash = targetUri.lastIndexOf('/');
+    const dir = lastSlash >= 0 ? targetUri.slice(0, lastSlash + 1) : '';
+    const name = lastSlash >= 0 ? targetUri.slice(lastSlash + 1) : targetUri;
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return `${dir}.${name}.repair-${suffix}.tmp`;
+  }
+
+  private deleteFileQuietly(uri: string): void {
     try {
-      const existingFile = new File(existingUri);
-      const exists = typeof existingFile.exists === 'boolean' ? existingFile.exists : true;
-      if (exists && typeof existingFile.delete === 'function') {
-        existingFile.delete();
+      const file = new File(uri);
+      const exists = typeof file.exists === 'boolean' ? file.exists : true;
+      if (exists && typeof file.delete === 'function') {
+        file.delete();
       }
     } catch {
-      // 忽略删除失败，交由后续覆盖复制尝试修复
+      // 忽略临时文件清理失败
     }
-    await nativeCopyFile(sourceUri, existingUri);
+  }
+
+  private async copyAndVerifyHistoryFile(
+    sourceUri: string,
+    targetUri: string,
+    content: ClipboardContent,
+    unverifiableCheck?: { expectedSize?: number; expectedHash: string }
+  ): Promise<void> {
+    const stagingUri = this.createStagingUri(targetUri);
+    try {
+      await nativeCopyFile(sourceUri, stagingUri);
+
+      if (unverifiableCheck) {
+        const stagedSize = this.getFileByteSize(stagingUri);
+        if (
+          stagedSize === undefined ||
+          (unverifiableCheck.expectedSize !== undefined &&
+            stagedSize !== unverifiableCheck.expectedSize)
+        ) {
+          throw new Error('[HistoryService] Staged history file size mismatch');
+        }
+        const stagedHash = await calculateFileHash(stagingUri);
+        if (!compareHash(stagedHash, unverifiableCheck.expectedHash)) {
+          throw new Error('[HistoryService] Staged history file hash mismatch');
+        }
+      } else {
+        const stagedVerdict = await this.verifyFileAgainstRecord(stagingUri, content);
+        if (stagedVerdict !== 'valid') {
+          throw new Error('[HistoryService] Staged history file failed integrity validation');
+        }
+      }
+
+      await nativeReplaceFile(stagingUri, targetUri);
+    } catch (error) {
+      this.deleteFileQuietly(stagingUri);
+      throw error;
+    }
   }
 
   addItems(items: HistoryItem[]): Promise<void> {
