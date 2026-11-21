@@ -1,0 +1,95 @@
+name: Build all Android APKs from drag and share integration
+
+on:
+  push:
+    branches: [verify/full-android-a70b7c8]
+
+permissions:
+  contents: read
+
+jobs:
+  sync-fork-main:
+    name: Fast-forward fork main to upstream v1.1.8
+    if: github.repository == 'Paxton-PKJ/syncclipboard-mobile'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 78878642c297ed560823744ec81de0e0b6000eb7
+          fetch-depth: 0
+      - name: Update the fork with the Actions repository token
+        run: |
+          case "$(git remote get-url origin)" in
+            https://github.com/Paxton-PKJ/syncclipboard-mobile|https://github.com/Paxton-PKJ/syncclipboard-mobile.git) ;;
+            *) exit 1 ;;
+          esac
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor refs/remotes/origin/main HEAD
+          git push --no-follow-tags origin HEAD:refs/heads/main
+          git ls-remote --exit-code origin refs/heads/main
+
+  code-style:
+    uses: ./.github/workflows/code-style.yml
+
+  unit-tests:
+    uses: ./.github/workflows/test.yml
+
+  full-android-build:
+    needs: sync-fork-main
+    uses: ./.github/workflows/android-build.yml
+    with:
+      source-ref: a70b7c8f9f2b43a28f648829dff8a32a0571fa2e
+
+  verify-apks:
+    name: Verify APK signatures, integrity and architectures
+    needs: full-android-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: apk-*
+          path: apks
+      - name: Check each APK and report its SHA-256
+        env:
+          APP_VERSION: ${{ needs.full-android-build.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          from hashlib import file_digest
+          import os
+          from pathlib import Path
+          import subprocess
+          from zipfile import ZipFile
+
+          root = Path('apks')
+          version = os.environ['APP_VERSION']
+          assert version, 'The build did not report an app version'
+          abis = {'arm64-v8a', 'armeabi-v7a', 'x86_64'}
+          expected = {abi: {abi} for abi in abis}
+          expected['universal'] = abis
+          assert {p.name for p in root.iterdir()} == {f'apk-{name}' for name in expected}
+          sdk = Path(os.environ['ANDROID_HOME'])
+          signers = sorted((sdk / 'build-tools').glob('*/apksigner'))
+          assert signers, 'Android SDK build-tools did not include apksigner'
+          signer = signers[-1]
+          rows = ['| APK | ABIs | Bytes | SHA-256 |', '| --- | --- | ---: | --- |']
+          for name, required in sorted(expected.items()):
+              files = list((root / f'apk-{name}').glob('*.apk'))
+              assert len(files) == 1, (name, files)
+              apk = files[0]
+              assert apk.name == f'SyncClipboard-{version}-{name}.apk', apk.name
+              with ZipFile(apk) as archive:
+                  assert archive.testzip() is None, f'{apk.name} failed the ZIP integrity check'
+                  found = {p.split('/')[1] for p in archive.namelist() if p.startswith('lib/') and p.endswith('.so')}
+              assert found == required, (apk.name, found, required)
+              subprocess.run([str(signer), 'verify', '--verbose', str(apk)], check=True)
+              with apk.open('rb') as stream:
+                  digest = file_digest(stream, 'sha256').hexdigest()
+              rows.append(f'| {apk.name} | {", ".join(sorted(found))} | {apk.stat().st_size} | `{digest}` |')
+
+          report = '\n'.join(rows) + '\n'
+          print(report)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write(report)
+          PY

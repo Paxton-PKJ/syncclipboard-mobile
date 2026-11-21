@@ -2,6 +2,9 @@ name: android-build
 
 on:
   workflow_call:
+    inputs:
+      source-ref:
+        type: string
     outputs:
       version:
         description: "App version from package.json"
@@ -17,6 +20,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -69,21 +74,25 @@ jobs:
         with:
           name: apk-arm64-v8a
           path: android/app/build/outputs/apk/release/SyncClipboard-${{ steps.version.outputs.version }}-arm64-v8a.apk
+          if-no-files-found: error
 
       - name: Upload armeabi-v7a APK
         uses: actions/upload-artifact@v7
         with:
           name: apk-armeabi-v7a
           path: android/app/build/outputs/apk/release/SyncClipboard-${{ steps.version.outputs.version }}-armeabi-v7a.apk
+          if-no-files-found: error
 
       - name: Upload x86_64 APK
         uses: actions/upload-artifact@v7
         with:
           name: apk-x86_64
           path: android/app/build/outputs/apk/release/SyncClipboard-${{ steps.version.outputs.version }}-x86_64.apk
+          if-no-files-found: error
 
       - name: Upload universal APK
         uses: actions/upload-artifact@v7
         with:
           name: apk-universal
           path: android/app/build/outputs/apk/release/SyncClipboard-${{ steps.version.outputs.version }}-universal.apk
+          if-no-files-found: error
