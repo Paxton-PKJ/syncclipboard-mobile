@@ -1,5 +1,6 @@
 package expo.modules.nativeutil
 
+import android.content.Intent
 import android.content.ClipData
 import android.content.ClipDescription
 import android.net.Uri
@@ -18,6 +19,20 @@ class IncomingContentParserClipDataTest {
             clipData.addItem(items[i])
         }
         return clipData
+    }
+
+    @Test
+    fun `share grants cover only data and clip URIs with the read flag`() {
+        val clipUri = Uri.parse("content://external/clip")
+        val dataUri = Uri.parse("content://external/data")
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            data = dataUri
+            clipData = ClipData.newRawUri("shared", clipUri)
+            putExtra(Intent.EXTRA_STREAM, Uri.parse("content://external/ungranted"))
+        }
+        assertEquals(emptySet<Uri>(), IncomingContentParser.shareReadGrantUris(intent))
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        assertEquals(setOf(clipUri, dataUri), IncomingContentParser.shareReadGrantUris(intent))
     }
 
     @Test

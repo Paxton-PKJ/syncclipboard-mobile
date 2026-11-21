@@ -139,6 +139,27 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     });
   });
 
+  it('接收合法长文件名时，暂存和最终文件名均符合 Android 单段字节限制', async () => {
+    const fileName = `${'界'.repeat(80)}.png`;
+    const bytes = encoder.encode('image');
+    const fileUri = `file:///cache/${fileName}`;
+    mockFiles.set(fileUri, bytes);
+    const profileHash = sha256(`${fileName}|${sha256(bytes).toUpperCase()}`).toUpperCase();
+    const saved = await historyService.addLocalContent({
+      type: 'Image',
+      text: fileName,
+      fileName,
+      fileUri,
+      profileHash,
+      hasData: true,
+    });
+    const stagingUri = jest.mocked(nativeCopyFile).mock.calls[0][1];
+    expect(
+      encoder.encode(decodeURIComponent(stagingUri.split('/').pop()!)).length
+    ).toBeLessThanOrEqual(255);
+    expect(saved.fileUri?.endsWith(`/${fileName}`)).toBe(true);
+  });
+
   it('历史长文本副本已截断时，setRemoteClipboard 上传完整源字节并覆盖修复历史副本', async () => {
     const fullText = `完整正文-${'A'.repeat(1500)}-END`;
     const fullBytes = encoder.encode(fullText);

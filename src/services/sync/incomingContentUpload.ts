@@ -74,11 +74,6 @@ const defaultDeps: IncomingUploadDeps = {
   setRemoteClipboard,
 };
 
-function isAbortError(error: unknown, signal: AbortSignal): boolean {
-  if (signal.aborted) return true;
-  return error instanceof Error && error.name === 'AbortError';
-}
-
 /**
  * 共享的外部传入内容（系统分享 / 拖放）上传编排：
  * 等待原生后台暂存完成 → 构建 ClipboardContent → 上传到远程剪贴板并同步历史记录。
@@ -199,7 +194,7 @@ export async function uploadIncomingSession(
 
     throw new Error(t('shareReceive.noContent'));
   } catch (error) {
-    if (isAbortError(error, signal) && session.sessionId) {
+    if (signal.aborted) {
       deps.cleanupSession(session.sessionId);
     }
     throw error;

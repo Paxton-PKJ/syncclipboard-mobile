@@ -2,21 +2,22 @@ package expo.modules.nativeutil
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Process
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.util.Locale
+import java.io.OutputStream
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -135,6 +136,7 @@ object IncomingContentImportManager {
         context: Context,
         source: ParsedIncomingSource,
         sourceOrigin: String,
+        readGrantUris: Set<Uri>,
         notifyShareEvent: Boolean = false,
         onReleasePermissions: (() -> Unit)? = null
     ): IncomingSessionMeta {
@@ -235,6 +237,7 @@ object IncomingContentImportManager {
                 appContext = appContext,
                 record = record,
                 source = source,
+                readGrantUris = readGrantUris,
                 onReleasePermissions = onReleasePermissions
             )
         }
@@ -308,6 +311,7 @@ object IncomingContentImportManager {
         appContext: Context,
         record: SessionRecord,
         source: ParsedIncomingSource,
+        readGrantUris: Set<Uri>,
         onReleasePermissions: (() -> Unit)?
     ) {
         val sessionDir = record.sessionDir
@@ -329,7 +333,7 @@ object IncomingContentImportManager {
                 }
 
                 val uri = uris[index]
-                validateIncomingUri(appContext, uri)
+                validateIncomingUri(appContext, uri, readGrantUris)
                 val resolvedMime = resolveInitialMimeType(contentResolver, uri, source.declaredMimeType)
                 val initialName = IncomingContentParser.resolveFileName(
                     contentResolver = contentResolver,
@@ -342,7 +346,6 @@ object IncomingContentImportManager {
                 val expectedBytes = queryContentSize(contentResolver, uri)
 
                 val copiedBytes = copyUriToFile(
-                    appContext = appContext,
                     contentResolver = contentResolver,
                     uri = uri,
                     destFile = destFile,
@@ -427,28 +430,15 @@ object IncomingContentImportManager {
     }
 
     private fun queryContentSize(contentResolver: ContentResolver, uri: Uri): Long {
-        if (uri.scheme == ContentResolver.SCHEME_FILE) {
-            val path = uri.path ?: return 0L
-            return File(path).takeIf { it.isFile }?.length() ?: 0L
-        }
         return runCatching {
             contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val idx = cursor.getColumnIndex(OpenableColumns.SIZE)
-                    if (idx != -1 && !cursor.isNull(idx)) {
-                        cursor.getLong(idx).coerceAtLeast(0L)
-                    } else {
-                        0L
-                    }
-                } else {
-                    0L
-                }
-            } ?: 0L
-        }.getOrDefault(0L)
+                val idx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (cursor.moveToFirst() && idx >= 0 && !cursor.isNull(idx)) cursor.getLong(idx) else -1L
+            } ?: -1L
+        }.getOrDefault(-1L)
     }
 
     private fun copyUriToFile(
-        appContext: Context,
         contentResolver: ContentResolver,
         uri: Uri,
         destFile: File,
@@ -458,29 +448,20 @@ object IncomingContentImportManager {
         totalFiles: Int,
         cancelFlag: AtomicBoolean
     ): Long {
-        val inputStream = openValidatedInputStream(appContext, contentResolver, uri)
+        val inputStream = contentResolver.openInputStream(uri)
             ?: throw IOException("Cannot open input stream for URI: $uri")
 
-        var bytesCopied = 0L
         var lastReportTime = 0L
-        val buffer = ByteArray(COPY_BUFFER_SIZE)
-
-        inputStream.use { input ->
+        val bytesCopied = inputStream.use { input ->
             FileOutputStream(destFile).use { output ->
-                while (true) {
+                copyIncomingStream(input, output, expectedBytes) { count ->
                     if (cancelFlag.get()) throw CancelledSignal()
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    output.write(buffer, 0, read)
-                    bytesCopied += read
-
                     val now = System.currentTimeMillis()
                     if (now - lastReportTime >= PROGRESS_INTERVAL_MS) {
                         lastReportTime = now
-                        emitProgress(sessionId, currentFile, totalFiles, bytesCopied, expectedBytes)
+                        emitProgress(sessionId, currentFile, totalFiles, count, expectedBytes)
                     }
                 }
-                output.flush()
             }
         }
 
@@ -489,68 +470,43 @@ object IncomingContentImportManager {
         return bytesCopied
     }
 
-    private fun openValidatedInputStream(
-        appContext: Context,
-        contentResolver: ContentResolver,
-        uri: Uri
-    ): InputStream? {
-        validateIncomingUri(appContext, uri)
-        if (uri.scheme.equals(ContentResolver.SCHEME_FILE, ignoreCase = true)) {
-            val rawPath = uri.path ?: return null
-            val sourceFile = File(rawPath).canonicalFile
-            if (!sourceFile.isFile || !sourceFile.canRead()) {
-                return null
-            }
-            return FileInputStream(sourceFile)
+    internal fun copyIncomingStream(
+        input: InputStream,
+        output: OutputStream,
+        expectedBytes: Long,
+        onProgress: (Long) -> Unit
+    ): Long {
+        val buffer = ByteArray(COPY_BUFFER_SIZE)
+        var count = 0L
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            count += read
+            if (expectedBytes >= 0 && count > expectedBytes) throw IOException("Incoming file exceeds its declared size")
+            onProgress(count)
+            output.write(buffer, 0, read)
         }
-        return contentResolver.openInputStream(uri)
+        if (expectedBytes >= 0 && count != expectedBytes) throw IOException("Incoming file is shorter than its declared size")
+        return count
     }
 
-    private fun validateIncomingUri(appContext: Context, uri: Uri) {
-        val ownPackage = appContext.packageName.orEmpty()
-        val privateDirs = buildList {
-            runCatching { appContext.applicationInfo.dataDir }.getOrNull()
-                ?.let { runCatching { File(it).canonicalPath }.getOrNull() }
-                ?.let(::add)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                runCatching { appContext.applicationInfo.deviceProtectedDataDir }.getOrNull()
-                    ?.let { runCatching { File(it).canonicalPath }.getOrNull() }
-                    ?.let(::add)
-            }
-            runCatching { appContext.filesDir?.parentFile?.path }.getOrNull()
-                ?.let { runCatching { File(it).canonicalPath }.getOrNull() }
-                ?.let(::add)
-            runCatching { appContext.cacheDir?.parentFile?.path }.getOrNull()
-                ?.let { runCatching { File(it).canonicalPath }.getOrNull() }
-                ?.let(::add)
-            if (ownPackage.isNotEmpty()) {
-                runCatching { File("/data/data/$ownPackage").canonicalPath }.getOrNull()
-                    ?.let(::add)
-            }
-        }.distinct()
-
-        val scheme = uri.scheme
-        val canonicalFilePath = if (scheme.equals(ContentResolver.SCHEME_FILE, ignoreCase = true)) {
-            uri.path?.let { File(it).canonicalPath }
-        } else {
-            null
-        }
-
+    private fun validateIncomingUri(context: Context, uri: Uri, readGrantUris: Set<Uri>) {
         validateIncomingUriComponents(
-            scheme = scheme,
+            scheme = uri.scheme,
             rawAuthority = uri.authority,
-            canonicalFilePath = canonicalFilePath,
-            ownPackageName = ownPackage,
-            ownPrivateDirs = privateDirs,
+            ownPackageName = context.packageName,
+            hasReadGrant = uri in readGrantUris && context.checkUriPermission(
+                uri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_READ_URI_PERMISSION
+            ) == PackageManager.PERMISSION_GRANTED,
             resolveProviderPackage = { authority ->
                 val providerInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    appContext.packageManager.resolveContentProvider(
+                    context.packageManager.resolveContentProvider(
                         authority,
                         PackageManager.ComponentInfoFlags.of(0)
                     )
                 } else {
                     @Suppress("DEPRECATION")
-                    appContext.packageManager.resolveContentProvider(authority, 0)
+                    context.packageManager.resolveContentProvider(authority, 0)
                 }
                 providerInfo?.packageName
             }
@@ -560,49 +516,20 @@ object IncomingContentImportManager {
     internal fun validateIncomingUriComponents(
         scheme: String?,
         rawAuthority: String?,
-        canonicalFilePath: String?,
         ownPackageName: String,
-        ownPrivateDirs: List<String>,
+        hasReadGrant: Boolean,
         resolveProviderPackage: (String) -> String?
     ) {
-        val normalizedScheme = scheme?.lowercase(Locale.ROOT)
-        when (normalizedScheme) {
-            "file" -> {
-                if (canonicalFilePath.isNullOrEmpty()) {
-                    throw SecurityException("File URI has no path")
-                }
-                val normalizedPath = canonicalFilePath.trimEnd('/', File.separatorChar)
-                val blocked = ownPrivateDirs.any { dir ->
-                    val normalizedDir = dir.trimEnd('/', File.separatorChar)
-                    normalizedDir.isNotEmpty() &&
-                        (normalizedPath == normalizedDir ||
-                            canonicalFilePath.startsWith("$normalizedDir/") ||
-                            canonicalFilePath.startsWith("$normalizedDir${File.separator}"))
-                }
-                if (blocked) {
-                    throw SecurityException("Access to app private directory is denied")
-                }
-            }
-            "content" -> {
-                val authority = rawAuthority?.substringAfterLast('@')?.trim()
-                if (authority.isNullOrEmpty()) {
-                    throw SecurityException("Content URI has no authority")
-                }
-                val providerPkg = runCatching { resolveProviderPackage(authority) }.getOrNull()
-                if (
-                    ownPackageName.isNotEmpty() &&
-                    (
-                        (providerPkg != null && providerPkg.equals(ownPackageName, ignoreCase = true)) ||
-                            authority.equals(ownPackageName, ignoreCase = true) ||
-                            authority.startsWith("$ownPackageName.", ignoreCase = true)
-                    )
-                ) {
-                    throw SecurityException("Access to app private content provider is denied: $authority")
-                }
-            }
-            else -> {
-                throw SecurityException("Unsupported incoming URI scheme: $scheme")
-            }
+        if (scheme != ContentResolver.SCHEME_CONTENT || !hasReadGrant) {
+            throw SecurityException("Incoming file requires a content URI with a read grant")
+        }
+        val authority = rawAuthority?.substringAfterLast('@')?.trim().orEmpty()
+        if (authority.isEmpty()) throw SecurityException("Content URI has no authority")
+        if (authority.equals(ownPackageName, ignoreCase = true) ||
+            authority.startsWith("$ownPackageName.", ignoreCase = true) ||
+            resolveProviderPackage(authority).equals(ownPackageName, ignoreCase = true)
+        ) {
+            throw SecurityException("Access to app private content provider is denied")
         }
     }
 
