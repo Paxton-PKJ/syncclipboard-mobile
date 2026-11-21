@@ -275,3 +275,14 @@ it.each([10, 12])('共享手动下载时，限额 %i 的调用者独立检查实
   else await expect(limited).resolves.toMatchObject({ fileUri: 'file://history/data' });
   expect(downloadData).toHaveBeenCalledTimes(1);
 });
+
+// 历史页只等待入队，任务被取消时可能没有调用者订阅 awaiter。
+it.each(['download', 'upload'] as const)('排队的 %s 任务取消后允许稍后观察拒绝', async (type) => {
+  const queue = new HistoryTransferQueue();
+  const id = 'Text-hash';
+  const task = await (type === 'download' ? queue.addDownloadTask(id) : queue.addUploadTask(id));
+  expect(queue.cancelTask(id, type)).toBe(true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await expect(task.awaiter).rejects.toThrow('Task cancelled');
+  expect(queue.getPendingCount()).toBe(0);
+});
