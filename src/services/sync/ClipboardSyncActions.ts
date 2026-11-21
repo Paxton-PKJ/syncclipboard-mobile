@@ -53,12 +53,16 @@ export async function setRemoteClipboard(
     const server = await configService.getActiveServer();
     if (!server) throw new Error(i18n.t('common.serverNotConfigured'));
 
-    await historyService.addLocalContent(content);
+    const savedHistory = await historyService.addLocalContent(content);
+    const persistentContent =
+      savedHistory?.fileUri && savedHistory.fileUri !== content.fileUri
+        ? { ...content, fileUri: savedHistory.fileUri }
+        : content;
 
-    await getClientService().setRemoteClipboard(content, notify, sig);
+    await getClientService().setRemoteClipboard(persistentContent, notify, sig);
 
-    // 上传完成后，更新 remoteContent
-    clipboardSyncState.setRemoteContent(content);
+    // 上传完成后，更新 remoteContent（使用持久化的历史文件 URI，避免引用已清理的临时目录）
+    clipboardSyncState.setRemoteContent(persistentContent);
 
     return true;
   });

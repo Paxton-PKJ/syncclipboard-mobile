@@ -91,11 +91,11 @@ class NativeUtilModule : Module() {
     }
 
     private val incomingEventBridge = object : IncomingContentImportManager.EventBridge {
-        override fun onProgress(payload: Map<String, Any?>) {
+        override fun onProgress(payload: Map<String, Any>) {
             sendEvent(EVENT_INCOMING_SESSION_PROGRESS, payload)
         }
 
-        override fun onShareSession(payload: Map<String, Any?>) {
+        override fun onShareSession(payload: Map<String, Any>) {
             sendEvent(EVENT_INCOMING_SHARE_SESSION, payload)
         }
     }

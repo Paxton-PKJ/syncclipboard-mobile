@@ -83,11 +83,11 @@ export const QuickLoadingPage: React.FC<QuickLoadingPageProps> = ({
   const [state, setState] = useState<LoadingState>('loading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // 用 ref 持有 task，避免 task 引用变化触发 useEffect 重复执行
+  // 用 ref 持有 task 与 t，避免回调引用变化触发 useEffect 中途取消并重跑任务
   const taskRef = useRef(task);
-  useEffect(() => {
-    taskRef.current = task;
-  }, [task]);
+  taskRef.current = task;
+  const tRef = useRef(t);
+  tRef.current = t;
 
   // AbortController 用于取消任务
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -102,16 +102,19 @@ export const QuickLoadingPage: React.FC<QuickLoadingPageProps> = ({
 
     try {
       await taskRef.current(signal);
+      if (signal.aborted) {
+        return;
+      }
       setState('success');
     } catch (err) {
       // 如果是取消操作，直接返回，不显示错误
       if (signal.aborted) {
         return;
       }
-      setErrorMessage(err instanceof Error ? err.message : t('common.defaultError'));
+      setErrorMessage(err instanceof Error ? err.message : tRef.current('common.defaultError'));
       setState('error');
     }
-  }, [onComplete]);
+  }, []);
 
   useEffect(() => {
     run();
