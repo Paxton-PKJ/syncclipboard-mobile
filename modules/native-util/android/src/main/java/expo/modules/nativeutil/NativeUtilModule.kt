@@ -83,8 +83,31 @@ class NativeUtilModule : Module() {
         sendEvent(EVENT_NETWORK_CHANGED, mapOf("capturedAt" to System.currentTimeMillis().toDouble()))
     }
 
+    private fun cleanupDragCache() {
+        val context = appContext.reactContext ?: return
+        dragPreparationExecutor.execute { runCatching { ImageDragFileStore.cleanup(context) } }
+    }
+
     override fun definition() = ModuleDefinition {
         Name("NativeUtilModule")
+
+        OnCreate { cleanupDragCache() }
+        OnActivityEntersBackground { cleanupDragCache() }
+
+        View(DragGestureSurfaceView::class) {
+            Events("onSelectionGesture", "onDragRequested", "onDragEnded")
+            Prop("gestureEpoch") { view: DragGestureSurfaceView, epoch: Int -> view.gestureEpoch = epoch }
+            Prop("enabled") { view: DragGestureSurfaceView, enabled: Boolean -> view.gestureEnabled = enabled }
+            AsyncFunction("startDrag") { view: DragGestureSurfaceView, gestureId: Int, items: List<Map<String, Any?>>, promise: Promise ->
+                view.startDrag(gestureId, items, promise)
+            }
+            AsyncFunction("cancelGesture") { view: DragGestureSurfaceView -> view.cancelGesture() }
+        }
+
+        View(DragSourceView::class) {
+            Prop("sourceId") { view: DragSourceView, id: String -> view.sourceId = id }
+            Prop("gestureMode") { view: DragSourceView, mode: String -> view.gestureMode = mode }
+        }
 
         Events(
             EVENT_HASH_PROGRESS,
@@ -303,7 +326,7 @@ class NativeUtilModule : Module() {
                     }
 
                     val hashBytes = digest.digest()
-                    val hashHex = hashBytes.joinToString("") { "%02x".format(it) }.uppercase()
+                    val hashHex = hashBytes.toLowerHex().uppercase()
                     future.complete(hashHex)
                 } catch (e: Exception) {
                     cancelFlags.remove(jobId)

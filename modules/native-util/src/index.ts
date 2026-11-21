@@ -1,6 +1,9 @@
 import { Platform } from 'react-native';
 import { requireNativeModule, type EventSubscription } from 'expo-modules-core';
 
+export * from './DragGestureSurface';
+export * from './DragSource';
+
 export interface HashProgressEvent {
   progress: number;
   bytesRead: number;
