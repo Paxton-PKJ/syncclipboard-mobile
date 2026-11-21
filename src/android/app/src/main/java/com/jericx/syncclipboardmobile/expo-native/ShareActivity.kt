@@ -86,6 +86,7 @@ class ShareActivity : ReactActivity() {
             context = applicationContext,
             source = parsed,
             sourceOrigin = IncomingContentImportManager.ORIGIN_SHARE,
+            readGrantUris = IncomingContentParser.shareReadGrantUris(targetIntent),
             notifyShareEvent = notifyJs
         )
         currentSessionId = session.sessionId.takeIf { it.isNotEmpty() }

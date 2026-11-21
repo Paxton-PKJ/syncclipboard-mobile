@@ -118,6 +118,7 @@ class DropTargetView(context: Context, appContext: AppContext) : ExpoView(contex
                         context = context.applicationContext,
                         source = source,
                         sourceOrigin = IncomingContentImportManager.ORIGIN_DROP,
+                        readGrantUris = if (permissions != null) source.uris.toSet() else emptySet(),
                         notifyShareEvent = false,
                         onReleasePermissions = { runCatching { permissions?.release() } }
                     )

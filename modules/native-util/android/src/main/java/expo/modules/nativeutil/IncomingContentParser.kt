@@ -58,6 +58,17 @@ object IncomingContentParser {
         "audio/mpeg" to ".mp3"
     )
 
+    /** Android grants access to the data and ClipData URIs carried by this intent. */
+    fun shareReadGrantUris(intent: Intent?): Set<Uri> {
+        if (intent == null || intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION == 0) return emptySet()
+        return buildSet {
+            intent.data?.let(::add)
+            intent.clipData?.let { clip ->
+                for (index in 0 until clip.itemCount) clip.getItemAt(index).uri?.let(::add)
+            }
+        }
+    }
+
     fun parseShareIntent(intent: Intent?): ParsedIncomingSource {
         if (intent == null) return ParsedIncomingSource(ParsedIncomingSource.Kind.EMPTY)
         val action = intent.action ?: return ParsedIncomingSource(ParsedIncomingSource.Kind.EMPTY)

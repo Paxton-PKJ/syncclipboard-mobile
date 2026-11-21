@@ -287,9 +287,8 @@ export class HistoryService {
   private createStagingUri(targetUri: string): string {
     const lastSlash = targetUri.lastIndexOf('/');
     const dir = lastSlash >= 0 ? targetUri.slice(0, lastSlash + 1) : '';
-    const name = lastSlash >= 0 ? targetUri.slice(lastSlash + 1) : targetUri;
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return `${dir}.${name}.repair-${suffix}.tmp`;
+    return `${dir}.repair-${suffix}.tmp`;
   }
 
   private deleteFileQuietly(uri: string): void {

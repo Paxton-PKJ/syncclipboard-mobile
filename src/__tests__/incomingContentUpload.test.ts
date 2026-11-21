@@ -101,6 +101,26 @@ describe('uploadIncomingSession', () => {
     expect(deps.cleanupSession).toHaveBeenCalledWith('s-1');
   });
 
+  it('上传被另一项操作抢占时，仍可用原会话重试', async () => {
+    const { deps, callbacks } = createMocks();
+    const session = { sessionId: 'shared', kind: 'text' as const, itemCount: 1 };
+    const signal = new AbortController().signal;
+    jest
+      .mocked(deps.awaitSession)
+      .mockResolvedValue({ sessionId: 'shared', type: 'text', text: '正文' });
+    jest
+      .mocked(deps.setRemoteClipboard)
+      .mockRejectedValueOnce(Object.assign(new Error('superseded'), { name: 'AbortError' }))
+      .mockResolvedValueOnce(true);
+
+    await expect(uploadIncomingSession(session, signal, callbacks, deps)).rejects.toThrow(
+      'superseded'
+    );
+    expect(deps.cleanupSession).not.toHaveBeenCalled();
+    await uploadIncomingSession(session, signal, callbacks, deps);
+    expect(deps.cleanupSession).toHaveBeenCalledTimes(1);
+  });
+
   it('外部取消时清理暂存会话', async () => {
     const { deps, callbacks } = createMocks();
     const controller = new AbortController();
