@@ -1,5 +1,6 @@
 import { createHistoryItem } from '../types/clipboard';
 import {
+  HistoryDragSelectionController,
   buildHistoryDragItems,
   extendRangeSelection,
   findHistoryDragIndex,
@@ -123,4 +124,73 @@ it('invalidates the gesture scope only for source metadata, order, tab, multi-se
   expect(
     isHistoryGestureScopeChanged({ ...scope, multiSelect: false }, { ...scope, multiSelect: true })
   ).toBe(false);
+});
+
+describe('HistoryDragSelectionController lift and cancel coordinates', () => {
+  function setupController() {
+    const visibleIds = ['row-1', 'row-2', 'row-3'];
+    const items = visibleIds.map((id) => item(id));
+    const layouts = [
+      { x: 0, y: 0, width: 300, height: 50 },
+      { x: 0, y: 50, width: 300, height: 50 },
+      { x: 0, y: 100, width: 300, height: 50 },
+    ];
+    let selectedIds = new Set<string>();
+    let multiSelect = false;
+    const onRangeActive = jest.fn();
+
+    const controller = new HistoryDragSelectionController({
+      getSnapshot: () => ({ items, selectedIds }),
+      getVisibleIds: () => visibleIds,
+      isMultiSelect: () => multiSelect,
+      getList: () => ({
+        getLayout: (index) => layouts[index],
+        getFirstItemOffset: () => 0,
+        getAbsoluteLastScrollOffset: () => 0,
+        getChildContainerDimensions: () => ({ width: 300, height: 150 }),
+        scrollToOffset: jest.fn(),
+      }),
+      getSurface: () => null,
+      measureViewport: (callback) => callback({ x: 0, y: 0, width: 300, height: 300 }),
+      select: (ids) => {
+        selectedIds = ids;
+      },
+      enterMultiSelect: () => {
+        multiSelect = true;
+      },
+      onRangeActive,
+      onError: jest.fn(),
+      requestFrame: () => 1,
+      cancelFrame: jest.fn(),
+    });
+
+    return {
+      controller,
+      getSelected: () => [...selectedIds],
+      onRangeActive,
+    };
+  }
+
+  it('includes the final row hit by lift coordinates on normal gesture end', () => {
+    const { controller, getSelected, onRangeActive } = setupController();
+
+    controller.selection({ gestureId: 1, sourceId: 'row-1', phase: 'start', x: 50, y: 25 });
+    controller.selection({ gestureId: 1, sourceId: 'row-1', phase: 'move', x: 50, y: 75 });
+    expect(getSelected()).toEqual(['row-1', 'row-2']);
+
+    controller.selection({ gestureId: 1, sourceId: 'row-1', phase: 'end', x: 50, y: 125 });
+    expect(getSelected()).toEqual(['row-1', 'row-2', 'row-3']);
+    expect(onRangeActive).toHaveBeenLastCalledWith(false);
+  });
+
+  it('ignores terminal coordinates when the selection gesture is cancelled', () => {
+    const { controller, getSelected, onRangeActive } = setupController();
+
+    controller.selection({ gestureId: 1, sourceId: 'row-1', phase: 'start', x: 50, y: 25 });
+    controller.selection({ gestureId: 1, sourceId: 'row-1', phase: 'move', x: 50, y: 75 });
+    controller.selection({ gestureId: 1, sourceId: 'row-1', phase: 'cancel', x: 50, y: 125 });
+
+    expect(getSelected()).toEqual(['row-1', 'row-2']);
+    expect(onRangeActive).toHaveBeenLastCalledWith(false);
+  });
 });

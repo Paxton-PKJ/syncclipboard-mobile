@@ -244,8 +244,13 @@ export class HistoryDragSelectionController {
       this.deps.onRangeActive(true);
       this.onViewportChanged();
     } else if (this.range?.id === event.gestureId) {
-      if (event.phase === 'end' || event.phase === 'cancel') this.stopRange();
-      else {
+      if (event.phase === 'end') {
+        this.range.pointer = { x: event.x, y: event.y };
+        this.hitTest();
+        this.stopRange();
+      } else if (event.phase === 'cancel') {
+        this.stopRange();
+      } else {
         this.range.pointer = { x: event.x, y: event.y };
         const viewport = this.range.viewport;
         if (

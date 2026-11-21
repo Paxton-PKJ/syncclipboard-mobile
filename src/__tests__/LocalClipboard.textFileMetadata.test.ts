@@ -250,8 +250,28 @@ it.each(['Image', 'File', 'Group'] as const)('keeps %s upload sizes in bytes', a
   expect(profile.size).toBe(4096);
 });
 
-it.each([40000, 0, undefined])(
-  'preserves remote character metadata (server size=%s) across history and upload',
+it('preserves remote character metadata (server size=40000) across history and upload', async () => {
+  const preview = '预览文本🚀';
+  const content = profileDtoToContent({
+    type: 'Text',
+    text: preview,
+    hash: 'remote-hash',
+    hasData: true,
+    dataName: 'remote.txt',
+    size: 40000,
+  });
+  expect(content.textLength).toBe(40000);
+  expect(content.fileSize).toBeUndefined();
+  const item = clipboardContentToItem(content);
+  expect(item.size).toBe(40000);
+  expect(historyItemToDto(item).size).toBe(40000);
+  expect((await contentToProfileDto({ ...content, fileUri: 'file:///remote.txt' })).size).toBe(
+    40000
+  );
+});
+
+it.each([0, undefined])(
+  'keeps remote textLength undefined instead of using preview length when server size=%s',
   async (size) => {
     const preview = '预览文本🚀';
     const content = profileDtoToContent({
@@ -262,14 +282,13 @@ it.each([40000, 0, undefined])(
       dataName: 'remote.txt',
       size,
     });
-    const expected = size || preview.length;
-    expect(content.textLength).toBe(expected);
+    expect(content.textLength).toBeUndefined();
     expect(content.fileSize).toBeUndefined();
     const item = clipboardContentToItem(content);
-    expect(item.size).toBe(expected);
-    expect(historyItemToDto(item).size).toBe(expected);
+    expect(item.size).toBeUndefined();
+    expect(historyItemToDto(item).size).toBeUndefined();
     expect((await contentToProfileDto({ ...content, fileUri: 'file:///remote.txt' })).size).toBe(
-      expected
+      undefined
     );
   }
 );

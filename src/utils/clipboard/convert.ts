@@ -37,7 +37,7 @@ export async function contentToProfileDto(
           hash: profileHash,
           hasData: true,
           dataName: fileName,
-          size: textLength ?? text.length,
+          size: textLength,
         };
       }
       return {
@@ -97,8 +97,12 @@ export function profileDtoToContent(profile: ProfileDto): ClipboardContent {
   if (hasData) {
     switch (type) {
       case 'Text':
-        // TextProfile.Size 是字符数，远端元数据不能用作本地文件字节数。
-        return { ...baseContent, fileName: dataName, textLength: size || text?.length || 0 };
+        // TextProfile.Size 是字符数，远端元数据不能用作本地文件字节数；缺失时保持 undefined，不用预览长度冒充完整长度。
+        return {
+          ...baseContent,
+          fileName: dataName,
+          textLength: typeof size === 'number' && size > 0 ? size : undefined,
+        };
       case 'Image':
         return { ...baseContent, fileName: dataName, fileSize: size };
       case 'File':
@@ -194,7 +198,12 @@ export function clipboardContentToItem(
     localClipboardHash: content.localClipboardHash,
     hasData: content.hasData,
     dataName: content.fileName,
-    size: content.type === 'Text' ? (content.textLength ?? content.text.length) : content.fileSize,
+    size:
+      content.type === 'Text'
+        ? content.hasData
+          ? content.textLength
+          : (content.textLength ?? content.text.length)
+        : content.fileSize,
     timestamp: content.timestamp || Date.now(),
     fileUri: content.fileUri,
     ...overrides,
@@ -208,7 +217,14 @@ export function historyItemToContent(item: HistoryItem): ClipboardContent {
     fileUri: item.fileUri,
     fileName: item.dataName,
     fileSize: item.type === 'Text' ? undefined : item.size,
-    textLength: item.type === 'Text' ? (item.size ?? item.text.length) : undefined,
+    textLength:
+      item.type === 'Text'
+        ? item.hasData
+          ? typeof item.size === 'number' && item.size > 0
+            ? item.size
+            : undefined
+          : (item.size ?? item.text.length)
+        : undefined,
     profileHash: item.profileHash,
     localClipboardHash: item.localClipboardHash,
     hasData: item.hasData,
