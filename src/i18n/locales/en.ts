@@ -656,6 +656,7 @@ const en: DeepString<typeof zh> = {
   },
 
   shareReceive: {
+    stageAgain: 'Could not read the incoming content. Share or drop it again.',
     processingFile: 'Processing file…',
     stagingFile: 'Reading file…',
     stagingMultipleFiles: 'Reading {{count}} files…',

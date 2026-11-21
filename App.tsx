@@ -186,6 +186,7 @@ export default function App() {
           <DropTarget
             style={styles.container}
             enabled={dropEnabled}
+            acceptsDrop={!!activeServer}
             onDragStateChange={handleDropDragStateChange}
             onDropReceived={handleDropReceived}
           >

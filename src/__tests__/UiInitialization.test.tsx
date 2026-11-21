@@ -3,6 +3,7 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { create } from 'zustand';
 import { Linking, Platform } from 'react-native';
+import { DropTarget } from 'native-util';
 import App from '../../App';
 import QuickActionApp from '../QuickActionApp';
 import { AppNavigator } from '../navigation/AppNavigator';
@@ -45,7 +46,7 @@ const mockSettingsStore = create(() => ({
   config: { hideFromRecents: false, debugUrlScheme: false },
   isLoaded: false,
   loadConfig: mockLoadConfig,
-  getActiveServer: jest.fn(() => null),
+  getActiveServer: jest.fn((): { id: string } | null => null),
 }));
 
 const testGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
@@ -116,4 +117,19 @@ it('快捷页仍等待服务器选择完成后显示', async () => {
     finish();
   });
   expect(root.root.findAllByType(QuickTileLoadingScreen)).toHaveLength(1);
+});
+
+it('未配置服务器时只响应悬停，服务器变化后更新原生松手许可', async () => {
+  await act(async () => {
+    root = TestRenderer.create(<App />);
+  });
+  const target = () => root.root.findByType(DropTarget).props;
+  expect(target().enabled).toBe(true);
+  expect(target().acceptsDrop).toBe(false);
+  await act(async () =>
+    mockSettingsStore.setState({ getActiveServer: jest.fn(() => ({ id: 'test' })) })
+  );
+  expect(target().acceptsDrop).toBe(true);
+  await act(async () => mockSettingsStore.setState({ getActiveServer: jest.fn(() => null) }));
+  expect(target().acceptsDrop).toBe(false);
 });
