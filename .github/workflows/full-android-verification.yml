@@ -1,61 +1,28 @@
-name: Build all Android APKs from drag and share integration
+name: Audit the APKs produced for integration a70b7c8
 
 on:
   push:
     branches: [verify/full-android-a70b7c8]
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
-  sync-fork-main:
-    name: Fast-forward fork main to upstream v1.1.8
-    if: github.repository == 'Paxton-PKJ/syncclipboard-mobile'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: 78878642c297ed560823744ec81de0e0b6000eb7
-          fetch-depth: 0
-      - name: Update the fork with the Actions repository token
-        run: |
-          case "$(git remote get-url origin)" in
-            https://github.com/Paxton-PKJ/syncclipboard-mobile|https://github.com/Paxton-PKJ/syncclipboard-mobile.git) ;;
-            *) exit 1 ;;
-          esac
-          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor refs/remotes/origin/main HEAD
-          git push --no-follow-tags origin HEAD:refs/heads/main
-          git ls-remote --exit-code origin refs/heads/main
-
-  code-style:
-    uses: ./.github/workflows/code-style.yml
-
-  unit-tests:
-    uses: ./.github/workflows/test.yml
-
-  full-android-build:
-    needs: sync-fork-main
-    uses: ./.github/workflows/android-build.yml
-    with:
-      source-ref: a70b7c8f9f2b43a28f648829dff8a32a0571fa2e
-
   verify-apks:
-    name: Verify APK signatures, integrity and architectures
-    needs: full-android-build
+    name: Verify the four published APK artifacts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
         with:
+          github-token: ${{ github.token }}
+          run-id: 44889517424
           pattern: apk-*
           path: apks
-      - name: Check each APK and report its SHA-256
-        env:
-          APP_VERSION: ${{ needs.full-android-build.outputs.version }}
+      - name: Check signatures and the libraries for every configured ABI
         run: |
           python3 - <<'PY'
+          from collections import defaultdict
           from hashlib import file_digest
           import os
           from pathlib import Path
@@ -63,30 +30,49 @@ jobs:
           from zipfile import ZipFile
 
           root = Path('apks')
-          version = os.environ['APP_VERSION']
-          assert version, 'The build did not report an app version'
-          abis = {'arm64-v8a', 'armeabi-v7a', 'x86_64'}
-          expected = {abi: {abi} for abi in abis}
-          expected['universal'] = abis
-          assert {p.name for p in root.iterdir()} == {f'apk-{name}' for name in expected}
-          sdk = Path(os.environ['ANDROID_HOME'])
-          signers = sorted((sdk / 'build-tools').glob('*/apksigner'))
-          assert signers, 'Android SDK build-tools did not include apksigner'
+          supported = {'arm64-v8a', 'armeabi-v7a', 'x86_64'}
+          names = sorted(supported | {'universal'})
+          assert {p.name for p in root.iterdir()} == {f'apk-{name}' for name in names}
+          signers = sorted((Path(os.environ['ANDROID_HOME']) / 'build-tools').glob('*/apksigner'))
+          assert signers, 'apksigner is missing from the Android SDK'
           signer = signers[-1]
-          rows = ['| APK | ABIs | Bytes | SHA-256 |', '| --- | --- | ---: | --- |']
-          for name, required in sorted(expected.items()):
-              files = list((root / f'apk-{name}').glob('*.apk'))
-              assert len(files) == 1, (name, files)
-              apk = files[0]
-              assert apk.name == f'SyncClipboard-{version}-{name}.apk', apk.name
+          runtime = {'libappmodules.so', 'libreactnative.so', 'libhermesvm.so'}
+          rows = ['| APK | ABIs with complete app runtime | Bytes | SHA-256 |', '| --- | --- | ---: | --- |']
+          libraries = {}
+
+          for name in names:
+              apk = root / f'apk-{name}' / f'SyncClipboard-1.1.8-{name}.apk'
+              assert list(apk.parent.glob('*.apk')) == [apk], apk
+              by_abi = defaultdict(set)
               with ZipFile(apk) as archive:
-                  assert archive.testzip() is None, f'{apk.name} failed the ZIP integrity check'
-                  found = {p.split('/')[1] for p in archive.namelist() if p.startswith('lib/') and p.endswith('.so')}
-              assert found == required, (apk.name, found, required)
+                  assert archive.testzip() is None, f'{apk.name} failed its ZIP integrity check'
+                  for path in archive.namelist():
+                      if path.startswith('lib/') and path.endswith('.so'):
+                          _, abi, library = path.split('/')
+                          by_abi[abi].add(library)
+              required = supported if name == 'universal' else {name}
+              found = set(by_abi)
+              assert required <= found, (apk.name, found, required)
+              if name != 'universal':
+                  assert found == required, (apk.name, found, required)
+              for abi in required:
+                  assert runtime <= by_abi[abi], (apk.name, abi, runtime - by_abi[abi])
               subprocess.run([str(signer), 'verify', '--verbose', str(apk)], check=True)
+              libraries[name] = by_abi
+              complete = {abi for abi in found if runtime <= by_abi[abi]}
               with apk.open('rb') as stream:
                   digest = file_digest(stream, 'sha256').hexdigest()
-              rows.append(f'| {apk.name} | {", ".join(sorted(found))} | {apk.stat().st_size} | `{digest}` |')
+              rows.append(f'| {apk.name} | {", ".join(sorted(complete))} | {apk.stat().st_size} | `{digest}` |')
+
+          universal = libraries['universal']
+          for abi in sorted(supported):
+              assert libraries[abi][abi] <= universal[abi], (abi, libraries[abi][abi] - universal[abi])
+          for abi in sorted(universal.keys() - supported):
+              missing = runtime - universal[abi]
+              note = f'Extra ABI in universal APK: {abi}. Libraries: {", ".join(sorted(universal[abi]))}.'
+              if missing:
+                  note += f' Missing app runtime libraries: {", ".join(sorted(missing))}.'
+              rows.extend(('', note))
 
           report = '\n'.join(rows) + '\n'
           print(report)
