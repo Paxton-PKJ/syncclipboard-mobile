@@ -178,4 +178,54 @@ describe('downloadRemoteClipboard', () => {
     );
     expect(localClipboard.setClipboardContent).toHaveBeenCalledWith(downloaded, true);
   });
+
+  it('将 maxBytes 硬上限透传给底层下载，且手动无上限下载不会复用有上限的进行中下载', async () => {
+    const remoteText: ClipboardContent = {
+      type: 'Text',
+      text: 'preview',
+      hasData: true,
+      fileName: 'large.txt',
+      profileHash: 'capped-vs-uncapped',
+      textLength: 2_000_000,
+    };
+
+    const cappedLimit = 5 * 1024 * 1024;
+    let firstSignal: AbortSignal | undefined;
+    let rejectFirst: (err: Error) => void = () => {};
+    mockDownloadData
+      .mockImplementationOnce(
+        (_c: ClipboardContent, _p: unknown, sig: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            firstSignal = sig;
+            rejectFirst = reject;
+          })
+      )
+      .mockResolvedValueOnce({ ...remoteText, fileUri: 'file:///large.txt' });
+
+    const cappedPromise = downloadRemoteClipboard(remoteText, undefined, undefined, {
+      maxBytes: cappedLimit,
+    });
+    await Promise.resolve();
+    expect(mockDownloadData).toHaveBeenNthCalledWith(
+      1,
+      remoteText,
+      expect.any(Function),
+      expect.any(AbortSignal),
+      cappedLimit
+    );
+
+    const uncappedPromise = downloadRemoteClipboard(remoteText);
+    await Promise.resolve();
+    expect(firstSignal?.aborted).toBe(true);
+    rejectFirst(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+
+    await expect(cappedPromise).rejects.toThrow('Aborted');
+    await expect(uncappedPromise).resolves.toEqual({ ...remoteText, fileUri: 'file:///large.txt' });
+    expect(mockDownloadData).toHaveBeenNthCalledWith(
+      2,
+      remoteText,
+      expect.any(Function),
+      expect.any(AbortSignal)
+    );
+  });
 });

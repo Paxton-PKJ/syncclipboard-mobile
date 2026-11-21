@@ -71,6 +71,7 @@ import {
 import { localClipboard } from '../services/clipboard/LocalClipboard';
 import { profileDtoToContent } from '../utils/clipboard/convert';
 import { getClipboardChangedHandler } from '../services/sync/ClipboardChangedHandler';
+import { DownloadSizeLimitExceededError } from '../errors';
 import * as startupClock from '../services/StartupTiming';
 
 const SYSTEM_START_TIME_MS = 2_728_733_964;
@@ -195,8 +196,36 @@ describe('ClipboardChangedHandler 启动基线窗口', () => {
     expect(clipboardSyncState.setRemoteContent).toHaveBeenLastCalledWith(downloaded);
   });
 
-  it('远端文本最坏 UTF-8 字节上界超过 5 MiB 上限时拒绝自动下载（如 200 万字符）', async () => {
+  it('远端文本最坏 UTF-8 字节上界超出 5 MiB 但下界未超限时带流式硬上限尝试自动下载（200 万纯 ASCII 文本正常完成）', async () => {
     jest.spyOn(performance, 'now').mockReturnValue(SYSTEM_START_TIME_MS + 2_000);
+    const limit = 5 * 1024 * 1024;
+    const remote = profileDtoToContent({
+      type: 'Text',
+      text: 'a'.repeat(200),
+      hash: 'ascii-under-limit',
+      hasData: true,
+      dataName: 'ascii.txt',
+      size: 2 * 1024 * 1024,
+    });
+    const downloaded = { ...remote, fileUri: 'file:///ascii.txt' };
+    jest
+      .mocked(configService.getConfig)
+      .mockResolvedValue({ autoSync: true, autoDownloadMaxSize: limit } as never);
+    jest.mocked(downloadRemoteClipboard).mockResolvedValue(downloaded);
+
+    await handler.processRemoteClipboardContent(remote);
+
+    expect(downloadRemoteClipboard).toHaveBeenCalledWith(remote, undefined, undefined, {
+      maxBytes: limit,
+    });
+    expect(clipboardSyncState.setRemoteContent).toHaveBeenLastCalledWith(downloaded);
+    expect(copyToLocalClipboard).toHaveBeenCalledWith(downloaded);
+  });
+
+  it('远端文本流式下载触发硬上限时跳过自动下载与复制（如 200 万中文字符）', async () => {
+    jest.spyOn(performance, 'now').mockReturnValue(SYSTEM_START_TIME_MS + 2_000);
+    const limit = 5 * 1024 * 1024;
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const remote = profileDtoToContent({
       type: 'Text',
       text: '汉'.repeat(100),
@@ -204,6 +233,35 @@ describe('ClipboardChangedHandler 启动基线窗口', () => {
       hasData: true,
       dataName: 'remote.txt',
       size: 2_000_000,
+    });
+    jest
+      .mocked(configService.getConfig)
+      .mockResolvedValue({ autoSync: true, autoDownloadMaxSize: limit } as never);
+    jest
+      .mocked(downloadRemoteClipboard)
+      .mockRejectedValueOnce(new DownloadSizeLimitExceededError('Download size exceeds limit'));
+
+    await handler.processRemoteClipboardContent(remote);
+
+    expect(downloadRemoteClipboard).toHaveBeenCalledWith(remote, undefined, undefined, {
+      maxBytes: limit,
+    });
+    expect(copyToLocalClipboard).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    expect(clipboardSyncState.setRemoteContent).toHaveBeenCalledTimes(1);
+    expect(clipboardSyncState.setRemoteContent).toHaveBeenCalledWith(remote);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('远端文本最小 UTF-8 下界已超过 5 MiB 上限时直接跳过不发起下载（如 600 万字符）', async () => {
+    jest.spyOn(performance, 'now').mockReturnValue(SYSTEM_START_TIME_MS + 2_000);
+    const remote = profileDtoToContent({
+      type: 'Text',
+      text: 'a'.repeat(200),
+      hash: 'oversized-min-bound-text',
+      hasData: true,
+      dataName: 'huge.txt',
+      size: 6_000_000,
     });
     jest
       .mocked(configService.getConfig)

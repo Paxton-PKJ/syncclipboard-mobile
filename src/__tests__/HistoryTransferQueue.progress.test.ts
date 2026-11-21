@@ -7,6 +7,7 @@ jest.mock('../utils/hash', () => ({
 import { HistoryTransferQueue } from '../services/history/HistoryTransferQueue';
 import type { TransferTask } from '../services/history/HistoryTransferQueue';
 import type { IHistoryAPI } from '../api/history';
+import { DownloadSizeLimitExceededError } from '../errors';
 import { createHistoryItem } from '../types/clipboard';
 import type { ClipboardContent } from '../types/clipboard';
 import type { ProgressDetail } from '../types/progress';
@@ -180,4 +181,70 @@ it('downloaded images retain a byte hash in storage and returned content', async
     localClipboardHash: 'image-bytes',
   });
   expect(result.localClipboardHash).toBe('image-bytes');
+});
+
+it('forwards maxBytes to historyAPI.downloadData and aborts without retrying on limit exceeded', async () => {
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  mockStorage.getItem.mockResolvedValue(
+    createHistoryItem({
+      type: 'Text',
+      profileHash: 'limited-text',
+      timestamp: 100,
+      text: 'preview',
+      hasData: true,
+      dataName: 'limited.txt',
+      size: 2_000_000,
+    })
+  );
+
+  const downloadData = jest.fn(async (_pid, uri) => uri);
+  const queue = new HistoryTransferQueue({ retryDelayMs: 10 });
+  queue.setHistoryAPI({ downloadData } as unknown as IHistoryAPI);
+
+  await queue.executeImmediateDownload(
+    {
+      type: 'Text',
+      profileHash: 'limited-text',
+      text: 'preview',
+      hasData: true,
+      fileName: 'limited.txt',
+    },
+    undefined,
+    undefined,
+    5 * 1024 * 1024
+  );
+  expect(downloadData).toHaveBeenCalledWith(
+    'Text-limited-text',
+    'file://history/limited.txt',
+    expect.any(AbortSignal),
+    expect.any(Function),
+    5 * 1024 * 1024
+  );
+
+  jest.clearAllMocks();
+  const limitError = new DownloadSizeLimitExceededError('Download size (6000000) exceeds limit');
+  const failingDownload = jest.fn().mockRejectedValue(limitError);
+  queue.setHistoryAPI({ downloadData: failingDownload } as unknown as IHistoryAPI);
+  const snapshots: TransferTask[] = [];
+  queue.onTaskStatusChanged((task) => snapshots.push({ ...task }));
+
+  await expect(
+    queue.executeImmediateDownload(
+      {
+        type: 'Text',
+        profileHash: 'limited-text',
+        text: 'preview',
+        hasData: true,
+        fileName: 'limited.txt',
+      },
+      undefined,
+      undefined,
+      5 * 1024 * 1024
+    )
+  ).rejects.toThrow(DownloadSizeLimitExceededError);
+
+  expect(mockStorage.updateItem).not.toHaveBeenCalled();
+  expect(snapshots.every((t) => t.status !== 'waitForRetry' && t.failureCount === 0)).toBe(true);
+  expect(queue.getPendingCount()).toBe(0);
+  expect(queue.getActiveCount()).toBe(0);
 });

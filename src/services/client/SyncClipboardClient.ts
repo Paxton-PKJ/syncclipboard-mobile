@@ -7,7 +7,8 @@ import { HistorySyncStatus } from '@/types/clipboard';
 export async function downloadForSyncClipboard(
   remoteContent: ClipboardContent,
   progress?: ProgressCallback,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  maxBytes?: number
 ): Promise<ClipboardContent> {
   if (!remoteContent.profileHash) {
     throw new Error('No profileHash in remoteContent');
@@ -24,7 +25,9 @@ export async function downloadForSyncClipboard(
     console.error('[ClientService] Failed to add history item before download:', e);
   }
 
-  return await queue.executeImmediateDownload(remoteContent, progress, signal);
+  return maxBytes !== undefined
+    ? await queue.executeImmediateDownload(remoteContent, progress, signal, maxBytes)
+    : await queue.executeImmediateDownload(remoteContent, progress, signal);
 }
 
 export async function uploadForSyncClipboard(

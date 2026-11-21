@@ -21,9 +21,18 @@ function isSameContent(a: ClipboardContent, b: ClipboardContent): boolean {
   return a.fileName === b.fileName && a.fileSize === b.fileSize;
 }
 
+interface DownloadRequest {
+  content: ClipboardContent;
+  maxBytes?: number;
+}
+
+function isSameDownloadRequest(a: DownloadRequest, b: DownloadRequest): boolean {
+  return isSameContent(a.content, b.content) && a.maxBytes === b.maxBytes;
+}
+
 const _uploadOp = new DedupedOperation<ClipboardContent, boolean, ProgressInfo>(isSameContent);
-const _downloadOp = new DedupedOperation<ClipboardContent, ClipboardContent | null, ProgressDetail>(
-  isSameContent
+const _downloadOp = new DedupedOperation<DownloadRequest, ClipboardContent | null, ProgressDetail>(
+  isSameDownloadRequest
 );
 
 /**
@@ -94,6 +103,11 @@ export function cancelUploadLocalClipboard(): void {
   _uploadOp.abort();
 }
 
+export interface DownloadRemoteClipboardOptions {
+  /** 可选硬字节上限；仅用于大小不确定的远端文本自动下载。 */
+  maxBytes?: number;
+}
+
 /**
  * 下载远程剪贴板文件，并同步更新 UI 下载进度状态（downloadingRemote / downloadProgress）。
  * - 若与正在进行的下载内容相同，则继承（共享进度），等待完成。
@@ -105,7 +119,8 @@ export function cancelUploadLocalClipboard(): void {
 export async function downloadRemoteClipboard(
   content?: ClipboardContent | null,
   onProgress?: (info: ProgressDetail) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: DownloadRemoteClipboardOptions
 ): Promise<ClipboardContent | null> {
   const actualContent = content ?? clipboardSyncState.getState().remoteContent;
   if (!actualContent) return null;
@@ -122,25 +137,31 @@ export async function downloadRemoteClipboard(
     }
   }
 
-  return _downloadOp.execute(actualContent, onProgress, signal ?? null, async (sig, notify) => {
-    clipboardSyncState.setDownloadingRemote(true);
-    clipboardSyncState.setDownloadProgress(null);
-    try {
-      const result = await getClientService().downloadData(
-        actualContent,
-        (info: ProgressDetail) => {
+  const maxBytes = options?.maxBytes;
+  return _downloadOp.execute(
+    { content: actualContent, maxBytes },
+    onProgress,
+    signal ?? null,
+    async (sig, notify) => {
+      clipboardSyncState.setDownloadingRemote(true);
+      clipboardSyncState.setDownloadProgress(null);
+      try {
+        const progressReporter = (info: ProgressDetail) => {
           clipboardSyncState.setDownloadProgress(info);
           notify(info);
-        },
-        sig
-      );
-      clipboardSyncState.setState({ remoteContent: result });
+        };
+        const result =
+          maxBytes !== undefined
+            ? await getClientService().downloadData(actualContent, progressReporter, sig, maxBytes)
+            : await getClientService().downloadData(actualContent, progressReporter, sig);
+        clipboardSyncState.setState({ remoteContent: result });
 
-      return result;
-    } finally {
-      clipboardSyncState.clearDownloadState();
+        return result;
+      } finally {
+        clipboardSyncState.clearDownloadState();
+      }
     }
-  });
+  );
 }
 
 /**
