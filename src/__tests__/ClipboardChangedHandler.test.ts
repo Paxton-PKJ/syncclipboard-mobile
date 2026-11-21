@@ -278,21 +278,35 @@ describe('ClipboardChangedHandler 启动基线窗口', () => {
     async (size) => {
       jest.spyOn(performance, 'now').mockReturnValue(SYSTEM_START_TIME_MS + 2_000);
       const remote = profileDtoToContent({
-        type: 'Text', text: '短预览', hash: 'unknown-size', hasData: true, dataName: 'remote.txt', size,
+        type: 'Text',
+        text: '短预览',
+        hash: 'unknown-size',
+        hasData: true,
+        dataName: 'remote.txt',
+        size,
       });
       const downloaded = { ...remote, fileUri: 'file:///full-text.txt' };
       jest.mocked(downloadRemoteClipboard).mockResolvedValue(downloaded);
       await handler.processRemoteClipboardContent(remote);
-      expect(downloadRemoteClipboard).toHaveBeenCalledWith(remote, undefined, undefined, { maxBytes: 5 * 1024 * 1024 });
+      expect(downloadRemoteClipboard).toHaveBeenCalledWith(remote, undefined, undefined, {
+        maxBytes: 5 * 1024 * 1024,
+      });
       expect(copyToLocalClipboard).toHaveBeenCalledWith(downloaded);
     }
   );
 
   it('大小未知且自动下载额度为零时不下载或复制文本预览', async () => {
-    jest.mocked(configService.getConfig).mockResolvedValue({ autoSync: true, autoDownloadMaxSize: 0 } as never);
-    await handler.processRemoteClipboardContent(profileDtoToContent({
-      type: 'Text', text: 'preview', hasData: true, dataName: 'unknown.txt',
-    }));
+    jest
+      .mocked(configService.getConfig)
+      .mockResolvedValue({ autoSync: true, autoDownloadMaxSize: 0 } as never);
+    await handler.processRemoteClipboardContent(
+      profileDtoToContent({
+        type: 'Text',
+        text: 'preview',
+        hasData: true,
+        dataName: 'unknown.txt',
+      })
+    );
     expect(downloadRemoteClipboard).not.toHaveBeenCalled();
     expect(copyToLocalClipboard).not.toHaveBeenCalled();
   });

@@ -189,6 +189,7 @@ export class HistoryTransferQueue {
       resolveAwaiter = resolve;
       rejectAwaiter = reject;
     });
+    awaiter.catch(() => {});
 
     const task: TransferTask = {
       profileId,
@@ -231,6 +232,7 @@ export class HistoryTransferQueue {
       resolveAwaiter = resolve;
       rejectAwaiter = reject;
     });
+    awaiter.catch(() => {});
 
     const task: TransferTask = {
       profileId,
