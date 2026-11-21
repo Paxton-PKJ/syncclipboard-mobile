@@ -255,11 +255,13 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
         : null;
     }
     if (clipboard.textLength !== undefined) return formatSizeWithType(clipboard.textLength, 'Text');
-    if (clipboard.fileSize === undefined) return null;
-    // 内联文本直接以字符数展示；完整文本存于文件时展示文件字节大小
-    return clipboard.hasData
-      ? formatSizeWithType(clipboard.fileSize)
-      : formatSizeWithType(clipboard.text.length, 'Text');
+    if (clipboard.fileSize !== undefined) {
+      // 内联文本直接以字符数展示；完整文本存于文件时展示文件字节大小
+      return clipboard.hasData
+        ? formatSizeWithType(clipboard.fileSize)
+        : formatSizeWithType(clipboard.text.length, 'Text');
+    }
+    return clipboard.text.length > 0 ? formatSizeWithType(clipboard.text.length, 'Text') : null;
   };
 
   const sizeLabel = getSizeLabel();

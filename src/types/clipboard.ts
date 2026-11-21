@@ -143,7 +143,7 @@ export interface ClipboardContent {
   /** 文件字节数；文本仅在已知本地文件实际大小时设置，不承载服务端字符数 */
   fileSize?: number;
 
-  /** 完整文本的 UTF-16 代码单元数量；服务端缺失大小时以预览长度兜底 */
+  /** 完整文本的 UTF-16 代码单元数量，仅用于展示与协议元数据；远端 hasData 文本缺失服务端大小时保持 undefined */
   textLength?: number;
 
   /** Profile hash（用于服务器上传，遵循服务器规则） */

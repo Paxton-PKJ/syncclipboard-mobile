@@ -176,37 +176,101 @@ describe('ClipboardChangedHandler 启动基线窗口', () => {
     expect(copyToLocalClipboard).toHaveBeenCalledWith(next);
   });
 
-  it.each([40000, undefined])(
-    '远端文本只有字符数（size=%s）时仍会自动下载完整文件',
+  it('远端文本最坏 UTF-8 字节上界在自动下载上限内时自动下载完整文件', async () => {
+    jest.spyOn(performance, 'now').mockReturnValue(SYSTEM_START_TIME_MS + 2_000);
+    const remote = profileDtoToContent({
+      type: 'Text',
+      text: '预览'.repeat(5120),
+      hash: 'remote-text',
+      hasData: true,
+      dataName: 'remote.txt',
+      size: 40_000,
+    });
+    const downloaded = { ...remote, fileUri: 'file:///remote.txt' };
+    jest.mocked(downloadRemoteClipboard).mockResolvedValue(downloaded);
+
+    await handler.processRemoteClipboardContent(remote);
+
+    expect(downloadRemoteClipboard).toHaveBeenCalledWith(remote);
+    expect(clipboardSyncState.setRemoteContent).toHaveBeenLastCalledWith(downloaded);
+  });
+
+  it('远端文本最坏 UTF-8 字节上界超过 5 MiB 上限时拒绝自动下载（如 200 万字符）', async () => {
+    jest.spyOn(performance, 'now').mockReturnValue(SYSTEM_START_TIME_MS + 2_000);
+    const remote = profileDtoToContent({
+      type: 'Text',
+      text: '汉'.repeat(100),
+      hash: 'oversized-cjk-text',
+      hasData: true,
+      dataName: 'remote.txt',
+      size: 2_000_000,
+    });
+    jest
+      .mocked(configService.getConfig)
+      .mockResolvedValue({ autoSync: true, autoDownloadMaxSize: 5 * 1024 * 1024 } as never);
+
+    await handler.processRemoteClipboardContent(remote);
+
+    expect(downloadRemoteClipboard).not.toHaveBeenCalled();
+    expect(copyToLocalClipboard).not.toHaveBeenCalled();
+  });
+
+  it.each([0, undefined])(
+    '远端 hasData 文本缺失服务端大小（size=%s）时不得用预览长度放行自动下载',
     async (size) => {
+      jest.spyOn(performance, 'now').mockReturnValue(SYSTEM_START_TIME_MS + 2_000);
       const remote = profileDtoToContent({
         type: 'Text',
-        text: '预览'.repeat(5120),
-        hash: 'remote-text',
+        text: '短预览',
+        hash: `unknown-size-${String(size)}`,
         hasData: true,
         dataName: 'remote.txt',
         size,
       });
-      const downloaded = { ...remote, fileUri: 'file:///remote.txt' };
-      jest.mocked(downloadRemoteClipboard).mockResolvedValue(downloaded);
+
       await handler.processRemoteClipboardContent(remote);
-      expect(downloadRemoteClipboard).toHaveBeenCalledWith(remote);
-      expect(clipboardSyncState.setRemoteContent).toHaveBeenLastCalledWith(downloaded);
+
+      expect(downloadRemoteClipboard).not.toHaveBeenCalled();
+      expect(copyToLocalClipboard).not.toHaveBeenCalled();
     }
   );
 
-  it('仍按字符大小限制拒绝超限文本的自动下载', async () => {
-    const remote = profileDtoToContent({
-      type: 'Text',
-      text: '预览',
-      hash: 'oversized-text',
+  it('远端文本提供明确字节 fileSize 时直接按 fileSize 判断自动下载上限', async () => {
+    jest.spyOn(performance, 'now').mockReturnValue(SYSTEM_START_TIME_MS + 2_000);
+    jest
+      .mocked(configService.getConfig)
+      .mockResolvedValue({ autoSync: true, autoDownloadMaxSize: 5 * 1024 * 1024 } as never);
+
+    const underLimit = {
+      type: 'Text' as const,
+      text: '短预览',
+      profileHash: 'under-limit-bytes',
       hasData: true,
-      dataName: 'remote.txt',
-      size: 100,
-    });
-    jest.mocked(configService.getConfig).mockResolvedValue({ autoDownloadMaxSize: 10 } as never);
-    await handler.processRemoteClipboardContent(remote);
+      fileName: 'under.txt',
+      fileSize: 4 * 1024 * 1024,
+      textLength: 2_000_000,
+    };
+    const downloaded = { ...underLimit, fileUri: 'file:///under.txt' };
+    jest.mocked(downloadRemoteClipboard).mockResolvedValue(downloaded);
+
+    await handler.processRemoteClipboardContent(underLimit);
+    expect(downloadRemoteClipboard).toHaveBeenCalledWith(underLimit);
+
+    jest.mocked(downloadRemoteClipboard).mockClear();
+    copyToLocalClipboard.mockClear();
+    const overLimit = {
+      type: 'Text' as const,
+      text: '短预览',
+      profileHash: 'over-limit-bytes',
+      hasData: true,
+      fileName: 'over.txt',
+      fileSize: 6 * 1024 * 1024,
+      textLength: 2_000_000,
+    };
+
+    await handler.processRemoteClipboardContent(overLimit);
     expect(downloadRemoteClipboard).not.toHaveBeenCalled();
+    expect(copyToLocalClipboard).not.toHaveBeenCalled();
   });
 });
 

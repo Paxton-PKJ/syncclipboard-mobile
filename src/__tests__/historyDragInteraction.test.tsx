@@ -286,7 +286,7 @@ it('keeps the initial hold in selection after React enters multi-select, then ac
   f.event('move', 150);
   expect(f.selected()).toEqual(['0']);
   f.event('move', 270);
-  f.event('end');
+  f.event('end', 270);
   await Promise.all([
     f.controller.drag({ gestureId: 2, sourceId: '2' }),
     f.controller.drag({ gestureId: 2, sourceId: '2' }),
@@ -332,7 +332,7 @@ it('continues selection on every edge-scroll frame with a stationary finger and 
   for (let frame = 1; frame <= 90; frame++) f.frame(1000 + frame * 32);
   expect(f.selected()).toContain('49');
   expect(f.offset()).toBe(2320);
-  f.event('end');
+  f.event('end', 300);
   expect(f.frames.size).toBe(0);
   expect(f.deps.onRangeActive).toHaveBeenLastCalledWith(false);
 });

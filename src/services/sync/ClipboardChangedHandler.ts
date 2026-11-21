@@ -24,6 +24,7 @@ import i18n from '@/i18n';
 import { logStartupPoint, getStartupElapsedMs } from '../StartupTiming';
 
 const STARTUP_BASELINE_WINDOW_MS = 2_000;
+const UTF8_MAX_BYTES_PER_UTF16_UNIT = 3;
 
 /** 判断下一次剪贴板内容是否应仅作为应用启动基线。 */
 function shouldUseStartupBaseline(
@@ -119,11 +120,7 @@ class ClipboardChangedHandler {
     if (fileUri && !content.fileUri) {
       console.log('[ClipboardChangedHandler] Found existing file in history');
       content = { ...content, fileUri };
-    } else if (
-      content.hasData &&
-      content.fileName &&
-      (content.type === 'Text' || content.fileSize !== undefined)
-    ) {
+    } else if (content.hasData && content.fileName) {
       const downloadedContent = await this.tryAutoDownload(content, config);
       if (!downloadedContent) {
         return;
@@ -138,17 +135,43 @@ class ClipboardChangedHandler {
     await this.tryAutoCopyToClipboard(content, config);
   }
 
+  private resolveAutoDownloadByteBound(content: ClipboardContent): number | undefined {
+    if (
+      typeof content.fileSize === 'number' &&
+      Number.isFinite(content.fileSize) &&
+      content.fileSize >= 0
+    ) {
+      return content.fileSize;
+    }
+    if (
+      content.type === 'Text' &&
+      typeof content.textLength === 'number' &&
+      Number.isFinite(content.textLength) &&
+      content.textLength > 0
+    ) {
+      // 服务端 TextProfile.size 为 UTF-16 字符数而非字节数；
+      // 每个 UTF-16 代码单元在 UTF-8 中最多占 3 字节（BMP 1~3B，代理对 2 单元占 4B），
+      // 无实际字节数时按最坏 UTF-8 字节上界执行限制，绝不用预览长度放行。
+      return content.textLength * UTF8_MAX_BYTES_PER_UTF16_UNIT;
+    }
+    return undefined;
+  }
+
   private async tryAutoDownload(
     content: ClipboardContent,
     config: AppConfig
   ): Promise<ClipboardContent | null> {
     const autoDownloadMaxSize = config?.autoDownloadMaxSize ?? 5 * 1024 * 1024;
-    const size =
-      content.type === 'Text' ? (content.textLength ?? content.text.length) : content.fileSize!;
+    const maxBytes = this.resolveAutoDownloadByteBound(content);
 
-    if (size > autoDownloadMaxSize) {
+    if (maxBytes === undefined) {
+      console.log('[ClipboardChangedHandler] Content byte size unknown, skipping auto-download');
+      return null;
+    }
+
+    if (maxBytes > autoDownloadMaxSize) {
       console.log(
-        `[ClipboardChangedHandler] Content too large (${size} > ${autoDownloadMaxSize}), skipping auto-download`
+        `[ClipboardChangedHandler] Content too large (${maxBytes} > ${autoDownloadMaxSize}), skipping auto-download`
       );
       return null;
     }
@@ -171,6 +194,7 @@ class ClipboardChangedHandler {
     config: AppConfig
   ): Promise<void> {
     if (content.type !== 'Text' && content.type !== 'Image') return;
+    if (content.type === 'Text' && content.hasData && !content.fileUri) return;
     if (content.type === 'Image' && (config.autoCopyTextOnly || !content.fileUri)) return;
 
     const autoSyncEnabled = config?.autoSync ?? false;
