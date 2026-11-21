@@ -9,7 +9,7 @@ export interface DropDragStateEvent {
 
 export interface IncomingSessionMeta {
   sessionId: string;
-  kind: 'text' | 'file' | 'multiple' | 'empty';
+  kind: 'text' | 'file' | 'multiple' | 'unsupported_mixed' | 'empty';
   itemCount: number;
   previewText?: string;
 }

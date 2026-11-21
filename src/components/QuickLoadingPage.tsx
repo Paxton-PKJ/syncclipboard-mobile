@@ -57,6 +57,8 @@ export interface QuickLoadingPageProps {
   overlayMode?: boolean;
   /** 保存或复制期间，禁止通过返回按钮、系统返回键或背景关闭。 */
   disableDismiss?: boolean;
+  /** 是否在失败状态展示重试按钮，默认开启 */
+  allowRetry?: boolean;
 }
 
 export const QuickLoadingPage: React.FC<QuickLoadingPageProps> = ({
@@ -75,6 +77,7 @@ export const QuickLoadingPage: React.FC<QuickLoadingPageProps> = ({
   previewImage,
   overlayMode,
   disableDismiss,
+  allowRetry = true,
 }) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
@@ -361,14 +364,20 @@ export const QuickLoadingPage: React.FC<QuickLoadingPageProps> = ({
               </ScrollView>
             )}
             <View style={styles.buttonRow}>
-              <TouchableOpacity
-                style={[styles.button, styles.rowButton, { backgroundColor: theme.colors.primary }]}
-                onPress={run}
-              >
-                <Text style={[styles.buttonText, { color: theme.colors.white }]}>
-                  {t('common.retry')}
-                </Text>
-              </TouchableOpacity>
+              {allowRetry && (
+                <TouchableOpacity
+                  style={[
+                    styles.button,
+                    styles.rowButton,
+                    { backgroundColor: theme.colors.primary },
+                  ]}
+                  onPress={run}
+                >
+                  <Text style={[styles.buttonText, { color: theme.colors.white }]}>
+                    {t('common.retry')}
+                  </Text>
+                </TouchableOpacity>
+              )}
               {errorMessage && (
                 <TouchableOpacity
                   style={[

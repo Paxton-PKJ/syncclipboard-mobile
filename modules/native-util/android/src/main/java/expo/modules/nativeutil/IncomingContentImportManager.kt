@@ -2,8 +2,10 @@ package expo.modules.nativeutil
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
@@ -14,6 +16,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -83,6 +86,7 @@ object IncomingContentImportManager {
     const val ORIGIN_SHARE = "share"
     const val ORIGIN_DROP = "drop"
     const val KIND_EMPTY = "empty"
+    const val KIND_UNSUPPORTED_MIXED = "unsupported_mixed"
 
     private const val TAG = "IncomingContentImport"
     private const val CACHE_DIR_NAME = ".incoming_transfer"
@@ -135,16 +139,24 @@ object IncomingContentImportManager {
         onReleasePermissions: (() -> Unit)? = null
     ): IncomingSessionMeta {
         val appContext = context.applicationContext
-        if (source.kind == ParsedIncomingSource.Kind.EMPTY) {
+        if (
+            source.kind == ParsedIncomingSource.Kind.EMPTY ||
+            source.kind == ParsedIncomingSource.Kind.UNSUPPORTED_MIXED
+        ) {
             runCatching { onReleasePermissions?.invoke() }
-            val emptyMeta = IncomingSessionMeta(sessionId = "", kind = KIND_EMPTY, itemCount = 0)
+            val rejectedKind = if (source.kind == ParsedIncomingSource.Kind.UNSUPPORTED_MIXED) {
+                KIND_UNSUPPORTED_MIXED
+            } else {
+                KIND_EMPTY
+            }
+            val rejectedMeta = IncomingSessionMeta(sessionId = "", kind = rejectedKind, itemCount = 0)
             if (sourceOrigin == ORIGIN_SHARE) {
                 activeShareSession = null
                 if (notifyShareEvent) {
-                    emitShareSession(emptyMeta.toMap())
+                    emitShareSession(rejectedMeta.toMap())
                 }
             }
-            return emptyMeta
+            return rejectedMeta
         }
 
         val sessionId = UUID.randomUUID().toString()
@@ -168,6 +180,7 @@ object IncomingContentImportManager {
                 kind = "multiple",
                 itemCount = source.uris.size
             )
+            ParsedIncomingSource.Kind.UNSUPPORTED_MIXED,
             ParsedIncomingSource.Kind.EMPTY -> {
                 runCatching { onReleasePermissions?.invoke() }
                 return IncomingSessionMeta(sessionId = "", kind = KIND_EMPTY, itemCount = 0)
@@ -316,6 +329,7 @@ object IncomingContentImportManager {
                 }
 
                 val uri = uris[index]
+                validateIncomingUri(appContext, uri)
                 val resolvedMime = resolveInitialMimeType(contentResolver, uri, source.declaredMimeType)
                 val initialName = IncomingContentParser.resolveFileName(
                     contentResolver = contentResolver,
@@ -480,24 +494,116 @@ object IncomingContentImportManager {
         contentResolver: ContentResolver,
         uri: Uri
     ): InputStream? {
-        if (uri.scheme == ContentResolver.SCHEME_FILE) {
+        validateIncomingUri(appContext, uri)
+        if (uri.scheme.equals(ContentResolver.SCHEME_FILE, ignoreCase = true)) {
             val rawPath = uri.path ?: return null
             val sourceFile = File(rawPath).canonicalFile
-            val appDataDir = runCatching { appContext.applicationInfo.dataDir }
-                .getOrNull()
-                ?.let { File(it).canonicalPath }
-            if (
-                appDataDir != null &&
-                (sourceFile.path == appDataDir || sourceFile.path.startsWith(appDataDir + File.separator))
-            ) {
-                throw SecurityException("Access to app private directory is denied")
-            }
             if (!sourceFile.isFile || !sourceFile.canRead()) {
                 return null
             }
             return FileInputStream(sourceFile)
         }
         return contentResolver.openInputStream(uri)
+    }
+
+    private fun validateIncomingUri(appContext: Context, uri: Uri) {
+        val ownPackage = appContext.packageName.orEmpty()
+        val privateDirs = buildList {
+            runCatching { appContext.applicationInfo.dataDir }.getOrNull()
+                ?.let { runCatching { File(it).canonicalPath }.getOrNull() }
+                ?.let(::add)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                runCatching { appContext.applicationInfo.deviceProtectedDataDir }.getOrNull()
+                    ?.let { runCatching { File(it).canonicalPath }.getOrNull() }
+                    ?.let(::add)
+            }
+            runCatching { appContext.filesDir?.parentFile?.path }.getOrNull()
+                ?.let { runCatching { File(it).canonicalPath }.getOrNull() }
+                ?.let(::add)
+            runCatching { appContext.cacheDir?.parentFile?.path }.getOrNull()
+                ?.let { runCatching { File(it).canonicalPath }.getOrNull() }
+                ?.let(::add)
+            if (ownPackage.isNotEmpty()) {
+                runCatching { File("/data/data/$ownPackage").canonicalPath }.getOrNull()
+                    ?.let(::add)
+            }
+        }.distinct()
+
+        val scheme = uri.scheme
+        val canonicalFilePath = if (scheme.equals(ContentResolver.SCHEME_FILE, ignoreCase = true)) {
+            uri.path?.let { File(it).canonicalPath }
+        } else {
+            null
+        }
+
+        validateIncomingUriComponents(
+            scheme = scheme,
+            rawAuthority = uri.authority,
+            canonicalFilePath = canonicalFilePath,
+            ownPackageName = ownPackage,
+            ownPrivateDirs = privateDirs,
+            resolveProviderPackage = { authority ->
+                val providerInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    appContext.packageManager.resolveContentProvider(
+                        authority,
+                        PackageManager.ComponentInfoFlags.of(0)
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    appContext.packageManager.resolveContentProvider(authority, 0)
+                }
+                providerInfo?.packageName
+            }
+        )
+    }
+
+    internal fun validateIncomingUriComponents(
+        scheme: String?,
+        rawAuthority: String?,
+        canonicalFilePath: String?,
+        ownPackageName: String,
+        ownPrivateDirs: List<String>,
+        resolveProviderPackage: (String) -> String?
+    ) {
+        val normalizedScheme = scheme?.lowercase(Locale.ROOT)
+        when (normalizedScheme) {
+            "file" -> {
+                if (canonicalFilePath.isNullOrEmpty()) {
+                    throw SecurityException("File URI has no path")
+                }
+                val normalizedPath = canonicalFilePath.trimEnd('/', File.separatorChar)
+                val blocked = ownPrivateDirs.any { dir ->
+                    val normalizedDir = dir.trimEnd('/', File.separatorChar)
+                    normalizedDir.isNotEmpty() &&
+                        (normalizedPath == normalizedDir ||
+                            canonicalFilePath.startsWith("$normalizedDir/") ||
+                            canonicalFilePath.startsWith("$normalizedDir${File.separator}"))
+                }
+                if (blocked) {
+                    throw SecurityException("Access to app private directory is denied")
+                }
+            }
+            "content" -> {
+                val authority = rawAuthority?.substringAfterLast('@')?.trim()
+                if (authority.isNullOrEmpty()) {
+                    throw SecurityException("Content URI has no authority")
+                }
+                val providerPkg = runCatching { resolveProviderPackage(authority) }.getOrNull()
+                if (
+                    ownPackageName.isNotEmpty() &&
+                    (
+                        (providerPkg != null && providerPkg.equals(ownPackageName, ignoreCase = true)) ||
+                            authority.equals(ownPackageName, ignoreCase = true) ||
+                            authority.startsWith("$ownPackageName.", ignoreCase = true)
+                    )
+                ) {
+                    throw SecurityException("Access to app private content provider is denied: $authority")
+                }
+            }
+            else -> {
+                throw SecurityException("Unsupported incoming URI scheme: $scheme")
+            }
+        }
     }
 
     private fun refineMimeType(file: File, initialMimeType: String?): String {

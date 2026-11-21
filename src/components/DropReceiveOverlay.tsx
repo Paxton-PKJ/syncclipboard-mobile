@@ -82,11 +82,11 @@ export const DropUploadOverlay: React.FC<DropUploadOverlayProps> = ({ session, o
 
   useEffect(() => {
     return () => {
-      if (session.sessionId) {
+      if (session.sessionId && session.kind !== 'unsupported_mixed') {
         cleanupIncomingSession(session.sessionId);
       }
     };
-  }, [session.sessionId]);
+  }, [session.kind, session.sessionId]);
 
   const task = useCallback(
     async (signal: AbortSignal) => {
@@ -120,6 +120,7 @@ export const DropUploadOverlay: React.FC<DropUploadOverlayProps> = ({ session, o
       previewText={previewText}
       previewImage={previewImage}
       overlayMode
+      allowRetry={session.kind !== 'unsupported_mixed'}
     />
   );
 };

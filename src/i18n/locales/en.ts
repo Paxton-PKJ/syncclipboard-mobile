@@ -678,6 +678,8 @@ const en: DeepString<typeof zh> = {
     noServerHint: 'Configure a server in Settings before dropping content',
     success: 'Sent dropped content',
     failed: 'Failed to send',
+    mixedContentUnsupported:
+      'Dropping files and text together is not supported. Please drop them separately.',
   },
 
   processText: {

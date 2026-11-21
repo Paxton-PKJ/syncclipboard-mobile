@@ -25,7 +25,8 @@ export type IncomingTranslationKey =
   | 'shareReceive.uploadingText'
   | 'shareReceive.uploadingFile'
   | 'shareReceive.processingMultipleFiles'
-  | 'shareReceive.processingFileProgress';
+  | 'shareReceive.processingFileProgress'
+  | 'dropReceive.mixedContentUnsupported';
 
 export interface IncomingUploadCallbacks {
   setLoadingText: (text: string) => void;
@@ -90,6 +91,10 @@ export async function uploadIncomingSession(
   deps: IncomingUploadDeps = defaultDeps
 ): Promise<void> {
   const { setLoadingText, setProgress, setPreviewText, setPreviewImage, t } = callbacks;
+
+  if (session.kind === 'unsupported_mixed') {
+    throw new Error(t('dropReceive.mixedContentUnsupported'));
+  }
 
   if (!session.sessionId || session.kind === 'empty') {
     throw new Error(t('shareReceive.noContent'));
@@ -194,7 +199,7 @@ export async function uploadIncomingSession(
 
     throw new Error(t('shareReceive.noContent'));
   } catch (error) {
-    if (isAbortError(error, signal)) {
+    if (isAbortError(error, signal) && session.sessionId) {
       deps.cleanupSession(session.sessionId);
     }
     throw error;

@@ -164,10 +164,14 @@ export default function App() {
     setDropDragState((prev) =>
       !prev.active && !prev.entered ? prev : { active: false, entered: false }
     );
-    if (!session.sessionId || session.kind === 'empty') {
+    if (session.kind === 'empty' || (session.kind !== 'unsupported_mixed' && !session.sessionId)) {
       return;
     }
-    setActiveDropSession(session);
+    setActiveDropSession(
+      session.kind === 'unsupported_mixed' && !session.sessionId
+        ? { ...session, sessionId: `unsupported-mixed-${Date.now()}` }
+        : session
+    );
   }, []);
 
   const handleDropUploadComplete = useCallback(() => {

@@ -21,6 +21,7 @@ data class ParsedIncomingSource(
         TEXT,
         FILE,
         MULTIPLE,
+        UNSUPPORTED_MIXED,
         EMPTY
     }
 }
@@ -125,38 +126,50 @@ object IncomingContentParser {
             }
         }
 
-        if (fileUris.size == 1) {
-            return ParsedIncomingSource(
+        return when (classifyDropItems(fileUris.size, texts)) {
+            ParsedIncomingSource.Kind.UNSUPPORTED_MIXED -> ParsedIncomingSource(
+                kind = ParsedIncomingSource.Kind.UNSUPPORTED_MIXED,
+                declaredMimeType = declaredMime
+            )
+            ParsedIncomingSource.Kind.FILE -> ParsedIncomingSource(
                 kind = ParsedIncomingSource.Kind.FILE,
                 uris = fileUris.toList(),
                 declaredMimeType = declaredMime
             )
-        }
-        if (fileUris.size > 1) {
-            return ParsedIncomingSource(
+            ParsedIncomingSource.Kind.MULTIPLE -> ParsedIncomingSource(
                 kind = ParsedIncomingSource.Kind.MULTIPLE,
                 uris = fileUris.toList(),
                 declaredMimeType = declaredMime
             )
+            ParsedIncomingSource.Kind.TEXT -> {
+                val nonEmptyTexts = texts.filter { it.isNotEmpty() }
+                ParsedIncomingSource(
+                    kind = ParsedIncomingSource.Kind.TEXT,
+                    text = if (nonEmptyTexts.isNotEmpty()) nonEmptyTexts.joinToString("\n") else "",
+                    declaredMimeType = declaredMime ?: "text/plain"
+                )
+            }
+            ParsedIncomingSource.Kind.EMPTY -> ParsedIncomingSource(ParsedIncomingSource.Kind.EMPTY)
         }
+    }
 
-        val nonEmptyTexts = texts.filter { it.isNotEmpty() }
-        if (nonEmptyTexts.isNotEmpty()) {
-            return ParsedIncomingSource(
-                kind = ParsedIncomingSource.Kind.TEXT,
-                text = nonEmptyTexts.joinToString("\n"),
-                declaredMimeType = declaredMime ?: "text/plain"
-            )
+    internal fun classifyDropItems(
+        fileUriCount: Int,
+        texts: List<String>
+    ): ParsedIncomingSource.Kind {
+        if (fileUriCount > 0 && texts.any { it.isNotBlank() }) {
+            return ParsedIncomingSource.Kind.UNSUPPORTED_MIXED
+        }
+        if (fileUriCount == 1) {
+            return ParsedIncomingSource.Kind.FILE
+        }
+        if (fileUriCount > 1) {
+            return ParsedIncomingSource.Kind.MULTIPLE
         }
         if (texts.isNotEmpty()) {
-            return ParsedIncomingSource(
-                kind = ParsedIncomingSource.Kind.TEXT,
-                text = "",
-                declaredMimeType = declaredMime ?: "text/plain"
-            )
+            return ParsedIncomingSource.Kind.TEXT
         }
-
-        return ParsedIncomingSource(ParsedIncomingSource.Kind.EMPTY)
+        return ParsedIncomingSource.Kind.EMPTY
     }
 
     fun canAcceptClipDescription(description: ClipDescription?): Boolean {
