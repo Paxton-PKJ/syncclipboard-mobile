@@ -96,7 +96,9 @@ export default function App() {
 
   useEffect(() => {
     if (!dropEnabled) {
-      setDropDragState({ active: false, entered: false });
+      setDropDragState((prev) =>
+        !prev.active && !prev.entered ? prev : { active: false, entered: false }
+      );
     }
   }, [dropEnabled]);
 
@@ -147,18 +149,29 @@ export default function App() {
 
   const handleDropDragStateChange = useCallback(
     (event: NativeSyntheticEvent<DropDragStateEvent>) => {
-      setDropDragState(event.nativeEvent);
+      const next = event.nativeEvent;
+      setDropDragState((prev) =>
+        prev.active === next.active && prev.entered === next.entered
+          ? prev
+          : { active: next.active, entered: next.entered }
+      );
     },
     []
   );
 
   const handleDropReceived = useCallback((event: NativeSyntheticEvent<IncomingSessionMeta>) => {
     const session = event.nativeEvent;
-    setDropDragState({ active: false, entered: false });
+    setDropDragState((prev) =>
+      !prev.active && !prev.entered ? prev : { active: false, entered: false }
+    );
     if (!session.sessionId || session.kind === 'empty') {
       return;
     }
     setActiveDropSession(session);
+  }, []);
+
+  const handleDropUploadComplete = useCallback(() => {
+    setActiveDropSession(null);
   }, []);
 
   return (
@@ -184,7 +197,7 @@ export default function App() {
               <DropUploadOverlay
                 key={activeDropSession.sessionId}
                 session={activeDropSession}
-                onComplete={() => setActiveDropSession(null)}
+                onComplete={handleDropUploadComplete}
               />
             </View>
           )}

@@ -27,7 +27,7 @@ data class IncomingSessionMeta(
     val itemCount: Int,
     val previewText: String? = null
 ) {
-    fun toMap(): Map<String, Any?> = buildMap {
+    fun toMap(): Map<String, Any> = buildMap {
         put("sessionId", sessionId)
         put("kind", kind)
         put("itemCount", itemCount)
@@ -48,7 +48,7 @@ data class StagedIncomingFile(
     val mimeType: String,
     val size: Long
 ) {
-    fun toMap(): Map<String, Any?> = mapOf(
+    fun toMap(): Map<String, Any> = mapOf(
         "uri" to uri,
         "fileName" to fileName,
         "mimeType" to mimeType,
@@ -64,7 +64,7 @@ data class IncomingSessionResult(
     val files: List<StagedIncomingFile> = emptyList(),
     val mimeType: String? = null
 ) {
-    fun toMap(): Map<String, Any?> = buildMap {
+    fun toMap(): Map<String, Any> = buildMap {
         put("sessionId", sessionId)
         put("type", type)
         if (text != null) put("text", text)
@@ -91,8 +91,8 @@ object IncomingContentImportManager {
     private const val STALE_RETENTION_MS = 60 * 60 * 1000L
 
     interface EventBridge {
-        fun onProgress(payload: Map<String, Any?>)
-        fun onShareSession(payload: Map<String, Any?>)
+        fun onProgress(payload: Map<String, Any>)
+        fun onShareSession(payload: Map<String, Any>)
     }
 
     private data class SessionRecord(
@@ -118,7 +118,7 @@ object IncomingContentImportManager {
         eventBridges.remove(bridge)
     }
 
-    fun getActiveShareSessionMap(): Map<String, Any?>? = activeShareSession?.toMap()
+    fun getActiveShareSessionMap(): Map<String, Any>? = activeShareSession?.toMap()
 
     fun clearActiveShareSessionIfMatches(sessionId: String) {
         val current = activeShareSession
@@ -558,7 +558,7 @@ object IncomingContentImportManager {
         bytesCopied: Long,
         totalBytes: Long
     ) {
-        val payload = mapOf(
+        val payload: Map<String, Any> = mapOf(
             "sessionId" to sessionId,
             "currentFile" to currentFile,
             "totalFiles" to totalFiles,
@@ -570,7 +570,7 @@ object IncomingContentImportManager {
         }
     }
 
-    private fun emitShareSession(payload: Map<String, Any?>) {
+    private fun emitShareSession(payload: Map<String, Any>) {
         for (bridge in eventBridges) {
             bridge.onShareSession(payload)
         }
