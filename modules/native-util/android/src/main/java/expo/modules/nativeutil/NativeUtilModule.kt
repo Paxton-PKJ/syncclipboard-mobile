@@ -44,6 +44,8 @@ class NativeUtilModule : Module() {
         private const val EVENT_ZIP_PROGRESS = "onZipProgress"
         private const val EVENT_COPY_PROGRESS = "onCopyProgress"
         private const val EVENT_NETWORK_CHANGED = "onNetworkChanged"
+        private const val EVENT_INCOMING_SESSION_PROGRESS = "onIncomingSessionProgress"
+        private const val EVENT_INCOMING_SHARE_SESSION = "onIncomingShareSession"
 
         private fun guessMimeType(fileName: String): String {
             val extension = fileName.substringAfterLast('.', "").lowercase()
@@ -88,11 +90,34 @@ class NativeUtilModule : Module() {
         dragPreparationExecutor.execute { runCatching { ImageDragFileStore.cleanup(context) } }
     }
 
+    private val incomingEventBridge = object : IncomingContentImportManager.EventBridge {
+        override fun onProgress(payload: Map<String, Any?>) {
+            sendEvent(EVENT_INCOMING_SESSION_PROGRESS, payload)
+        }
+
+        override fun onShareSession(payload: Map<String, Any?>) {
+            sendEvent(EVENT_INCOMING_SHARE_SESSION, payload)
+        }
+    }
+
+    private fun cleanupIncomingCache() {
+        val context = appContext.reactContext ?: return
+        IncomingContentImportManager.cleanupStaleSessions(context.applicationContext)
+    }
+
     override fun definition() = ModuleDefinition {
         Name("NativeUtilModule")
 
-        OnCreate { cleanupDragCache() }
-        OnActivityEntersBackground { cleanupDragCache() }
+        OnCreate {
+            IncomingContentImportManager.addEventBridge(incomingEventBridge)
+            cleanupDragCache()
+            cleanupIncomingCache()
+        }
+
+        OnActivityEntersBackground {
+            cleanupDragCache()
+            cleanupIncomingCache()
+        }
 
         View(DragGestureSurfaceView::class) {
             Events("onSelectionGesture", "onDragRequested", "onDragEnded")
@@ -109,13 +134,22 @@ class NativeUtilModule : Module() {
             Prop("gestureMode") { view: DragSourceView, mode: String -> view.gestureMode = mode }
         }
 
+        View(DropTargetView::class) {
+            Events("onDragStateChange", "onDropReceived")
+            Prop("enabled") { view: DropTargetView, enabled: Boolean ->
+                view.dropEnabled = enabled
+            }
+        }
+
         Events(
             EVENT_HASH_PROGRESS,
             EVENT_UPLOAD_PROGRESS,
             EVENT_DOWNLOAD_PROGRESS,
             EVENT_ZIP_PROGRESS,
             EVENT_COPY_PROGRESS,
-            EVENT_NETWORK_CHANGED
+            EVENT_NETWORK_CHANGED,
+            EVENT_INCOMING_SESSION_PROGRESS,
+            EVENT_INCOMING_SHARE_SESSION
         )
 
         OnStartObserving(EVENT_NETWORK_CHANGED) {
@@ -128,6 +162,23 @@ class NativeUtilModule : Module() {
 
         OnDestroy {
             currentNetworkObserver.stop()
+            IncomingContentImportManager.removeEventBridge(incomingEventBridge)
+        }
+
+        AsyncFunction("awaitIncomingSession") { sessionId: String, promise: Promise ->
+            IncomingContentImportManager.awaitSession(sessionId, promise)
+        }
+
+        Function("cancelIncomingSession") { sessionId: String ->
+            IncomingContentImportManager.cancelSession(sessionId)
+        }
+
+        Function("cleanupIncomingSession") { sessionId: String ->
+            IncomingContentImportManager.cleanupSession(sessionId)
+        }
+
+        Function("getActiveShareSession") {
+            IncomingContentImportManager.getActiveShareSessionMap()
         }
 
         Function("moveTaskToBack") {

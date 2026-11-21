@@ -657,6 +657,9 @@ const en: DeepString<typeof zh> = {
 
   shareReceive: {
     processingFile: 'Processing file…',
+    stagingFile: 'Reading file…',
+    stagingMultipleFiles: 'Reading {{count}} files…',
+    stagingFileProgress: 'Reading file {{current}}/{{total}}…',
     uploadingText: 'Uploading text…',
     uploadingFile: 'Uploading file…',
     processingMultipleFiles: 'Processing {{count}} files…',
@@ -667,6 +670,14 @@ const en: DeepString<typeof zh> = {
     resolveError: 'Failed to resolve shared content: {{error}}',
     noContent: 'No content to process',
     emptyText: 'Shared text content is empty',
+  },
+
+  dropReceive: {
+    hoverHint: 'Drop files or text here to send to remote clipboard',
+    releaseHint: 'Release to send to remote clipboard',
+    noServerHint: 'Configure a server in Settings before dropping content',
+    success: 'Sent dropped content',
+    failed: 'Failed to send',
   },
 
   processText: {

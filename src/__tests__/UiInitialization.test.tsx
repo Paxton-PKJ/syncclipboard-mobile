@@ -19,7 +19,10 @@ jest.mock('../hooks/useTheme', () => ({
 jest.mock('../i18n', () => ({}));
 jest.mock('../navigation/AppNavigator', () => ({ AppNavigator: 'AppNavigator' }));
 jest.mock('../screens/QuickTileLoadingScreen', () => ({ QuickTileLoadingScreen: 'QuickTile' }));
-jest.mock('../screens/ShareReceiveScreen', () => ({ ShareReceiveScreen: 'ShareReceive' }));
+jest.mock('../components/DropReceiveOverlay', () => ({
+  DropHoverOverlay: 'DropHoverOverlay',
+  DropUploadOverlay: 'DropUploadOverlay',
+}));
 jest.mock('../screens/ProcessTextScreen', () => ({ ProcessTextScreen: 'ProcessText' }));
 jest.mock('../screens/DirectShareReceiveScreen', () => ({
   DirectShareReceiveScreen: 'DirectShare',
@@ -42,6 +45,7 @@ const mockSettingsStore = create(() => ({
   config: { hideFromRecents: false, debugUrlScheme: false },
   isLoaded: false,
   loadConfig: mockLoadConfig,
+  getActiveServer: jest.fn(() => null),
 }));
 
 const testGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };

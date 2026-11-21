@@ -13,6 +13,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, StatusBar, Platform, BackHandler } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import {
+  addIncomingShareSessionListener,
+  getActiveShareSession,
+  type IncomingSessionMeta,
+} from 'native-util';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { I18nProvider } from './contexts/I18nContext';
 import { QuickTileLoadingScreen } from './screens/QuickTileLoadingScreen';
@@ -24,22 +29,11 @@ import { initLogger } from './utils/Logger';
 import { requestServiceRuntime } from './services/ServiceRuntime';
 import { networkAutoSwitchService } from './services/NetworkAutoSwitchService';
 
-export interface ShareData {
-  type: 'text' | 'file' | 'multiple';
-  text?: string;
-  uri?: string;
-  uris?: string[];
-  mimeType?: string;
-  fileName?: string;
-  /** 多文件分享时每个文件的文件名 */
-  fileNames?: string[];
-}
-
 interface QuickActionAppProps {
   direction?: string;
   text?: string;
   shareMode?: boolean;
-  shareData?: ShareData;
+  shareSession?: IncomingSessionMeta;
   systemTheme?: 'light' | 'dark';
 }
 
@@ -47,7 +41,7 @@ export default function QuickActionApp({
   direction,
   text,
   shareMode,
-  shareData,
+  shareSession,
   systemTheme,
 }: QuickActionAppProps) {
   const syncDirection = direction === 'upload' ? SyncDirection.Upload : SyncDirection.Download;
@@ -55,10 +49,34 @@ export default function QuickActionApp({
   const [isServerSelectionComplete, setIsServerSelectionComplete] = useState(
     Platform.OS !== 'android'
   );
+  const [activeShareSession, setActiveShareSession] = useState<IncomingSessionMeta | undefined>(
+    shareSession
+  );
 
   useEffect(() => {
     initLogger();
   }, []);
+
+  useEffect(() => {
+    setActiveShareSession(shareSession);
+  }, [shareSession]);
+
+  useEffect(() => {
+    if (!shareMode || Platform.OS !== 'android') return;
+
+    const latest = getActiveShareSession();
+    if (latest && latest.sessionId) {
+      setActiveShareSession((prev) => (prev?.sessionId === latest.sessionId ? prev : latest));
+    }
+
+    const sub = addIncomingShareSessionListener((nextSession) => {
+      setActiveShareSession(nextSession);
+    });
+
+    return () => {
+      sub?.remove();
+    };
+  }, [shareMode]);
 
   useEffect(() => {
     if (!isLoaded) {
@@ -101,15 +119,21 @@ export default function QuickActionApp({
 
   if (!isLoaded || !isServerSelectionComplete) return null;
 
-  // Share mode: receive shared content from other apps (direct data, not via expo-sharing)
-  if (shareMode && shareData) {
+  // Share mode: receive shared content via native incoming session
+  if (shareMode) {
+    const resolvedSession: IncomingSessionMeta = activeShareSession ?? {
+      sessionId: '',
+      kind: 'empty',
+      itemCount: 0,
+    };
     return (
       <GestureHandlerRootView style={styles.container}>
         <I18nProvider>
           <ThemeProvider systemColorSchemeOverride={systemTheme}>
             <StatusBar backgroundColor="transparent" translucent barStyle="light-content" />
             <DirectShareReceiveScreen
-              shareData={shareData}
+              key={resolvedSession.sessionId || 'empty'}
+              session={resolvedSession}
               onComplete={handleComplete}
               overlayMode
             />

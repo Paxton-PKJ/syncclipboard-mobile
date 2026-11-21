@@ -638,6 +638,9 @@ const zh = {
 
   shareReceive: {
     processingFile: '正在处理文件…',
+    stagingFile: '正在读取文件…',
+    stagingMultipleFiles: '正在读取 {{count}} 个文件…',
+    stagingFileProgress: '正在读取文件 {{current}}/{{total}}…',
     uploadingText: '正在上传文字…',
     uploadingFile: '正在上传文件…',
     processingMultipleFiles: '正在处理 {{count}} 个文件…',
@@ -648,6 +651,14 @@ const zh = {
     resolveError: '解析分享内容失败: {{error}}',
     noContent: '没有可处理的分享内容',
     emptyText: '分享的文字内容为空',
+  },
+
+  dropReceive: {
+    hoverHint: '拖放文件或文字到此处以发送到远程剪贴板',
+    releaseHint: '松手发送到远程剪贴板',
+    noServerHint: '请先在设置中配置服务器后再拖入内容',
+    success: '拖入发送成功',
+    failed: '发送失败',
   },
 
   processText: {

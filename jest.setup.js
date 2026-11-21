@@ -69,6 +69,13 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 jest.mock('native-util', () => ({
+  DropTarget: 'DropTarget',
+  isNativeDropTargetAvailable: false,
+  awaitIncomingSession: jest.fn(),
+  cancelIncomingSession: jest.fn(),
+  cleanupIncomingSession: jest.fn(),
+  getActiveShareSession: jest.fn(() => null),
+  addIncomingShareSessionListener: jest.fn(() => ({ remove: jest.fn() })),
   getLegacyHistoryDatabasePath: jest.fn(() => null),
   getCurrentNetworkInfo: jest.fn(() => null),
   addNetworkChangeListener: jest.fn(() => ({ remove: jest.fn() })),

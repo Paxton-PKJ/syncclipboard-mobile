@@ -1,18 +1,32 @@
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { StyleSheet, Linking, ToastAndroid, StatusBar, View, Platform } from 'react-native';
-import { useEffect, useState } from 'react';
+import {
+  StyleSheet,
+  Linking,
+  ToastAndroid,
+  StatusBar,
+  View,
+  Platform,
+  type NativeSyntheticEvent,
+} from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
 import { ThemeProvider } from './src/contexts/ThemeContext';
 import { I18nProvider } from './src/contexts/I18nContext';
 import '@/i18n';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { QuickTileLoadingScreen } from './src/screens/QuickTileLoadingScreen';
-import { ShareReceiveScreen } from './src/screens/ShareReceiveScreen';
+import { DropHoverOverlay, DropUploadOverlay } from './src/components/DropReceiveOverlay';
 import { SyncDirection } from './src/types/sync';
 import { useSettingsStore } from './src/stores';
 import { initLogger } from './src/utils/Logger';
 import { useTheme } from './src/hooks/useTheme';
 import { setDynamicShortcuts } from 'shortcut';
-import { moveTaskToBack, setExcludeFromRecents } from 'native-util';
+import {
+  DropTarget,
+  moveTaskToBack,
+  setExcludeFromRecents,
+  type DropDragStateEvent,
+  type IncomingSessionMeta,
+} from 'native-util';
 import { networkAutoSwitchService } from './src/services/NetworkAutoSwitchService';
 
 const QUICK_UPLOAD_URL = 'syncclipboard://quick-upload';
@@ -34,15 +48,6 @@ function parseQuickTileUrl(url: string | null): {
   return { isQuickTile: false, fromForeground: false, direction: SyncDirection.Download };
 }
 
-function isShareIntentUrl(url: string | null): boolean {
-  if (!url) return false;
-  try {
-    return new URL(url).hostname === 'expo-sharing';
-  } catch {
-    return false;
-  }
-}
-
 async function runOverlayNetworkPreflight(): Promise<void> {
   try {
     await networkAutoSwitchService.ensureCurrentServer();
@@ -56,12 +61,19 @@ type AppMode = 'checking' | 'home';
 export default function App() {
   const [appMode, setAppMode] = useState<AppMode>('checking');
   // 快速操作覆盖层：始终以 overlay 形式显示，不卸载 AppNavigator/HomeScreen
-  const [shareReceiveOverlay, setShareReceiveOverlay] = useState(false);
   const [quickActionOverlay, setQuickActionOverlay] = useState<{
     direction: SyncDirection;
     exitAfterSync: boolean;
   } | null>(null);
-  const { config, loadConfig, isLoaded } = useSettingsStore();
+  const [dropDragState, setDropDragState] = useState<DropDragStateEvent>({
+    active: false,
+    entered: false,
+  });
+  const [activeDropSession, setActiveDropSession] = useState<IncomingSessionMeta | null>(null);
+  const { config, loadConfig, isLoaded, getActiveServer } = useSettingsStore();
+
+  const activeServer = getActiveServer();
+  const dropEnabled = appMode === 'home' && !quickActionOverlay && !activeDropSession;
 
   useEffect(() => {
     initLogger();
@@ -83,6 +95,12 @@ export default function App() {
   }, [isLoaded, config?.hideFromRecents]);
 
   useEffect(() => {
+    if (!dropEnabled) {
+      setDropDragState({ active: false, entered: false });
+    }
+  }, [dropEnabled]);
+
+  useEffect(() => {
     if (!isLoaded) return;
 
     // Cold start: app launched via URL scheme
@@ -100,12 +118,6 @@ export default function App() {
       if (config?.debugUrlScheme) {
         ToastAndroid.show(`getInitialURL: ${url ?? 'null'}`, ToastAndroid.LONG);
       }
-      if (isShareIntentUrl(url)) {
-        setAppMode('home');
-        await runOverlayNetworkPreflight();
-        setShareReceiveOverlay(true);
-        return;
-      }
       const { isQuickTile, fromForeground, direction } = parseQuickTileUrl(url);
       // 同步运行时由进程入口管理，此处只负责显示主界面。
       setAppMode('home');
@@ -121,10 +133,6 @@ export default function App() {
       if (config?.debugUrlScheme) {
         ToastAndroid.show(`addEventListener url: ${url ?? 'null'}`, ToastAndroid.LONG);
       }
-      if (isShareIntentUrl(url)) {
-        runOverlayNetworkPreflight().then(() => setShareReceiveOverlay(true));
-        return;
-      }
       const { isQuickTile, fromForeground, direction } = parseQuickTileUrl(url);
       if (isQuickTile) {
         runOverlayNetworkPreflight().then(() => {
@@ -137,20 +145,46 @@ export default function App() {
     return () => urlSub.remove();
   }, [isLoaded, config?.debugUrlScheme]);
 
+  const handleDropDragStateChange = useCallback(
+    (event: NativeSyntheticEvent<DropDragStateEvent>) => {
+      setDropDragState(event.nativeEvent);
+    },
+    []
+  );
+
+  const handleDropReceived = useCallback((event: NativeSyntheticEvent<IncomingSessionMeta>) => {
+    const session = event.nativeEvent;
+    setDropDragState({ active: false, entered: false });
+    if (!session.sessionId || session.kind === 'empty') {
+      return;
+    }
+    setActiveDropSession(session);
+  }, []);
+
   return (
     <GestureHandlerRootView style={styles.container}>
       <ThemeProvider>
         <I18nProvider>
           <ThemedStatusBar />
-          {appMode === 'checking' ? null : <AppNavigator />}
-          {shareReceiveOverlay && (
+          <DropTarget
+            style={styles.container}
+            enabled={dropEnabled}
+            onDragStateChange={handleDropDragStateChange}
+            onDropReceived={handleDropReceived}
+          >
+            {appMode === 'checking' ? null : <AppNavigator />}
+          </DropTarget>
+          <DropHoverOverlay
+            visible={dropEnabled && dropDragState.active}
+            entered={dropDragState.entered}
+            hasActiveServer={!!activeServer}
+          />
+          {activeDropSession && (
             <View style={StyleSheet.absoluteFill}>
-              <ShareReceiveScreen
-                onComplete={() => {
-                  setShareReceiveOverlay(false);
-                  // 将快捷操作任务移到后台，保留返回主界面的导航状态
-                  moveTaskToBack();
-                }}
+              <DropUploadOverlay
+                key={activeDropSession.sessionId}
+                session={activeDropSession}
+                onComplete={() => setActiveDropSession(null)}
               />
             </View>
           )}
