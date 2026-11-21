@@ -3,6 +3,7 @@
  * 历史记录传输队列 - 管理数据上传/下载任务
  */
 
+import { checkDownloadedSize } from '../client/downloadSizeLimit';
 import type { IHistoryAPI } from '@/api/history';
 import {
   DownloadSizeLimitExceededError,
@@ -173,14 +174,14 @@ export class HistoryTransferQueue {
    * 添加下载任务
    */
   async addDownloadTask(profileId: string): Promise<TransferTask> {
+    const parsed = parseProfileId(profileId);
+    const item = parsed ? await this.historyStorage.getItem(parsed.hash) : null;
+    const displayName = item?.text || profileId;
+
     const existingTask = this.findTask(profileId, 'download');
     if (existingTask) {
       return existingTask;
     }
-
-    const parsed = parseProfileId(profileId);
-    const item = parsed ? await this.historyStorage.getItem(parsed.hash) : null;
-    const displayName = item?.text || profileId;
 
     let resolveAwaiter: (content: ClipboardContent) => void;
     let rejectAwaiter: (error: Error) => void;
@@ -264,6 +265,10 @@ export class HistoryTransferQueue {
   ): Promise<ClipboardContent> {
     const profileId = getProfileId(content.type, content.profileHash!);
 
+    const parsed = parseProfileId(profileId);
+    const item = parsed ? await this.historyStorage.getItem(parsed.hash) : null;
+    const displayName = item?.text || profileId;
+
     const existingTask = this.findTask(profileId, 'download');
 
     if (existingTask) {
@@ -277,13 +282,9 @@ export class HistoryTransferQueue {
         if (progress) {
           existingTask.externalProgressReporter = progress;
         }
-        return existingTask.awaiter;
+        return checkDownloadedSize(await existingTask.awaiter, maxBytes);
       }
     }
-
-    const parsed = parseProfileId(profileId);
-    const item = parsed ? await this.historyStorage.getItem(parsed.hash) : null;
-    const displayName = item?.text || profileId;
 
     const key = this.getTaskKey(profileId, 'download');
     let resolveAwaiter: (content: ClipboardContent) => void;

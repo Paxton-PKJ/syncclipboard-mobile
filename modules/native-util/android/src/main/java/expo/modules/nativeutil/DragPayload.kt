@@ -128,7 +128,12 @@ internal class DragPayload(val clipData: ClipData, val snapshots: List<ImageDrag
             // 首页和历史使用 TextProfile.Hash 校验完整内容，与是否提供字节元数据无关。
             if (id.matches(CONTENT_HASH_ID)) {
                 val hash = MessageDigest.getInstance("SHA-256").digest(bytes).toLowerHex()
-                if (!id.equals(hash, ignoreCase = true)) throw DragFailure("SOURCE_CHANGED", id)
+                if (!id.equals(hash, ignoreCase = true)) {
+                    // 旧存储客户端下载无 hash 文本时，使用了含文件名的 FileProfile 哈希。
+                    val legacyIdentity = "${source.name}|${hash.uppercase()}".toByteArray(Charsets.UTF_8)
+                    val legacyHash = MessageDigest.getInstance("SHA-256").digest(legacyIdentity).toLowerHex()
+                    if (!id.equals(legacyHash, ignoreCase = true)) throw DragFailure("SOURCE_CHANGED", id)
+                }
             }
             return text
         }

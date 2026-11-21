@@ -50,19 +50,16 @@ async function downloadAndAddToHistory(
 
   // 如果 profileHash 为空，下载完成后重新计算
   let profileHash = content.profileHash;
-  if (!profileHash) {
-    profileHash = await calculateFileProfileHash(fileUri, content.fileName || 'data');
+  let localClipboardHash = content.localClipboardHash;
+  if (!profileHash && content.type === 'Text') {
+    profileHash = await calculateFileHash(fileUri, signal);
+    localClipboardHash = profileHash;
+  } else if (!profileHash) {
+    profileHash = await calculateFileProfileHash(fileUri, content.fileName || 'data', signal);
   }
+  if (content.type === 'Image') localClipboardHash = await calculateFileHash(fileUri, signal);
 
-  let updatedContent: ClipboardContent = {
-    ...content,
-    fileUri,
-    profileHash,
-    localClipboardHash:
-      content.type === 'Image'
-        ? await calculateFileHash(fileUri, signal)
-        : content.localClipboardHash,
-  };
+  let updatedContent: ClipboardContent = { ...content, fileUri, profileHash, localClipboardHash };
 
   // 写入历史记录
   try {

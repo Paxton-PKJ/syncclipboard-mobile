@@ -6,9 +6,28 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.InputStream
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotEquals
 
 class DownloadStreamLimitTest {
+    @get:Rule
+    val temp = TemporaryFolder()
+
+    @Test
+    fun `temporary downloads fit Android filename limits and remain unique in the destination directory`() {
+        val destination = File(temp.root, "界".repeat(80) + ".png")
+        val first = createDownloadStagingFile(destination)
+        val second = createDownloadStagingFile(destination)
+        assertEquals(destination.parentFile, first.parentFile)
+        assertTrue(first.name.toByteArray().size <= 255)
+        assertNotEquals(first, second)
+        assertNotEquals(destination, first)
+    }
+
     @Test
     fun `rejects immediately when declared content length exceeds limit without reading stream`() {
         var readCalled = false

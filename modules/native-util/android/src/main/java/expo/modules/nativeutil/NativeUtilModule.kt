@@ -980,11 +980,7 @@ class NativeUtilModule : Module() {
                         return@submit
                     }
 
-                    val tempFile = if (parentDir != null) {
-                        File(parentDir, ".${file.name}.$jobId.part")
-                    } else {
-                        file
-                    }
+                    val tempFile = createDownloadStagingFile(file)
                     stagingFile = tempFile
 
                     connection.inputStream.use { input ->
@@ -1008,15 +1004,10 @@ class NativeUtilModule : Module() {
                         }
                     }
 
-                    if (tempFile != file) {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                        } else {
-                            if (file.exists()) file.delete()
-                            if (!tempFile.renameTo(file)) {
-                                throw IOException("Failed to finalize downloaded file: ${file.path}")
-                            }
-                        }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    } else if (!tempFile.renameTo(file)) {
+                        throw IOException("Failed to finalize downloaded file: ${file.path}")
                     }
 
                     cancelFlags.remove(jobId)
@@ -1391,6 +1382,9 @@ class DownloadErrorException(message: String, cause: Throwable? = null) : CodedE
 class UnexpectedResultException(type: String) : CodedException("Unexpected result type: $type")
 
 class WaitForJobException(message: String, cause: Throwable? = null) : CodedException(message, cause)
+
+internal fun createDownloadStagingFile(destination: File): File =
+    File.createTempFile(".download-", ".part", destination.absoluteFile.parentFile)
 
 internal class DownloadCancelledSignal : Exception()
 

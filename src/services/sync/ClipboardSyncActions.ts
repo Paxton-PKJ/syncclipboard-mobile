@@ -2,6 +2,7 @@ import type { ClipboardContent } from '@/types/clipboard';
 import type { ProgressInfo } from '@/types/progress';
 import type { ProgressDetail } from '@/types/progress';
 import { historyService } from '../history/HistoryService';
+import { checkDownloadedSize } from '../client/downloadSizeLimit';
 import { getClientService } from '../client/ClientService';
 import { configService } from '../ConfigService';
 import { remoteClipboardMonitor } from './RemoteClipboardMonitor';
@@ -26,13 +27,17 @@ interface DownloadRequest {
   maxBytes?: number;
 }
 
-function isSameDownloadRequest(a: DownloadRequest, b: DownloadRequest): boolean {
-  return isSameContent(a.content, b.content) && a.maxBytes === b.maxBytes;
+function canReuseDownload(request: DownloadRequest, running: DownloadRequest): boolean {
+  return (
+    isSameContent(request.content, running.content) &&
+    (running.maxBytes === undefined ||
+      (request.maxBytes !== undefined && request.maxBytes <= running.maxBytes))
+  );
 }
 
 const _uploadOp = new DedupedOperation<ClipboardContent, boolean, ProgressInfo>(isSameContent);
 const _downloadOp = new DedupedOperation<DownloadRequest, ClipboardContent | null, ProgressDetail>(
-  isSameDownloadRequest
+  canReuseDownload
 );
 
 /**
@@ -126,6 +131,8 @@ export async function downloadRemoteClipboard(
   const actualContent = content ?? clipboardSyncState.getState().remoteContent;
   if (!actualContent) return null;
 
+  const maxBytes = options?.maxBytes;
+
   // 检查历史记录中是否已有该文件
   if (actualContent.profileHash) {
     const cachedItem = await historyService.getItem(actualContent.profileHash);
@@ -133,13 +140,12 @@ export async function downloadRemoteClipboard(
       const cachedFile = new File(cachedItem.fileUri);
       if (cachedFile.exists) {
         const result = { ...actualContent, fileUri: cachedItem.fileUri };
-        return result;
+        return checkDownloadedSize(result, maxBytes);
       }
     }
   }
 
-  const maxBytes = options?.maxBytes;
-  return _downloadOp.execute(
+  const downloaded = await _downloadOp.execute(
     { content: actualContent, maxBytes },
     onProgress,
     signal ?? null,
@@ -163,6 +169,7 @@ export async function downloadRemoteClipboard(
       }
     }
   );
+  return downloaded && checkDownloadedSize(downloaded, maxBytes);
 }
 
 /**
