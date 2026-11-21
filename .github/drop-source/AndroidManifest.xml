@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="test.clipboard.source">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="31"/>
   <application android:label="PR drop fixture">
-    <activity android:name=".Source" android:exported="true" android:theme="@android:style/Theme.Material.Light.Dialog.NoActionBar"/>
+    <activity android:name=".Source" android:exported="true" android:theme="@android:style/Theme.Material.Light.NoActionBar"/>
     <provider android:name=".FixtureProvider" android:authorities="test.clipboard.source.files" android:exported="false" android:grantUriPermissions="true"/>
   </application>
 </manifest>

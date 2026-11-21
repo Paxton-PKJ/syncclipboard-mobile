@@ -39,6 +39,6 @@ public class Source extends Activity {
             return e.getAction() == DragEvent.ACTION_DRAG_STARTED;
         });
         setContentView(view);
-        getWindow().setLayout(780, 360);
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL);
     }
 }
