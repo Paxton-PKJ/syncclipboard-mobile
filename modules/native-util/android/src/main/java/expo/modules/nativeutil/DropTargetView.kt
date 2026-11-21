@@ -22,6 +22,8 @@ class DropTargetView(context: Context, appContext: AppContext) : ExpoView(contex
     private var dragActive = false
     private var dragEntered = false
 
+    var acceptsDrop: Boolean = false
+
     var dropEnabled: Boolean = true
         set(value) {
             if (field == value) return
@@ -85,7 +87,7 @@ class DropTargetView(context: Context, appContext: AppContext) : ExpoView(contex
             DragEvent.ACTION_DROP -> {
                 val wasActive = dragActive
                 updateDragState(active = false, entered = false)
-                if (!wasActive || !dropEnabled || event.localState != null) {
+                if (!wasActive || !dropEnabled || !acceptsDrop || event.localState != null) {
                     return false
                 }
 

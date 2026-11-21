@@ -58,7 +58,7 @@ export interface QuickLoadingPageProps {
   /** 保存或复制期间，禁止通过返回按钮、系统返回键或背景关闭。 */
   disableDismiss?: boolean;
   /** 是否在失败状态展示重试按钮，默认开启 */
-  allowRetry?: boolean;
+  allowRetry?: boolean | ((error: Error) => boolean);
 }
 
 export const QuickLoadingPage: React.FC<QuickLoadingPageProps> = ({
@@ -84,7 +84,8 @@ export const QuickLoadingPage: React.FC<QuickLoadingPageProps> = ({
   const { fontScale } = useWindowDimensions();
   const secondaryButtonSize = { minWidth: 44 + 40 * fontScale };
   const [state, setState] = useState<LoadingState>('loading');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [taskError, setTaskError] = useState<Error | null>(null);
+  const errorMessage = taskError?.message;
 
   // 用 ref 持有 task 与 t，避免回调引用变化触发 useEffect 中途取消并重跑任务
   const taskRef = useRef(task);
@@ -97,7 +98,7 @@ export const QuickLoadingPage: React.FC<QuickLoadingPageProps> = ({
 
   const run = useCallback(async () => {
     setState('loading');
-    setErrorMessage(null);
+    setTaskError(null);
 
     // 创建新的 AbortController
     abortControllerRef.current = new AbortController();
@@ -114,7 +115,7 @@ export const QuickLoadingPage: React.FC<QuickLoadingPageProps> = ({
       if (signal.aborted) {
         return;
       }
-      setErrorMessage(err instanceof Error ? err.message : tRef.current('common.defaultError'));
+      setTaskError(err instanceof Error ? err : new Error(tRef.current('common.defaultError')));
       setState('error');
     }
   }, []);
@@ -364,7 +365,9 @@ export const QuickLoadingPage: React.FC<QuickLoadingPageProps> = ({
               </ScrollView>
             )}
             <View style={styles.buttonRow}>
-              {allowRetry && (
+              {(typeof allowRetry === 'function'
+                ? taskError && allowRetry(taskError)
+                : allowRetry) && (
                 <TouchableOpacity
                   style={[
                     styles.button,

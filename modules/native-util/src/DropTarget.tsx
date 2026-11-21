@@ -16,6 +16,8 @@ export interface IncomingSessionMeta {
 
 export interface DropTargetProps extends ViewProps {
   enabled?: boolean;
+  /** 为 false 时仍报告悬停，但拒绝创建导入会话。 */
+  acceptsDrop?: boolean;
   onDragStateChange?: (event: NativeSyntheticEvent<DropDragStateEvent>) => void;
   onDropReceived?: (event: NativeSyntheticEvent<IncomingSessionMeta>) => void;
 }
@@ -35,6 +37,7 @@ export const isNativeDropTargetAvailable = Platform.OS === 'android' && NativeDr
  */
 export function DropTarget({
   enabled = true,
+  acceptsDrop = true,
   onDragStateChange,
   onDropReceived,
   ...props
@@ -47,6 +50,7 @@ export function DropTarget({
     <NativeDropTarget
       {...props}
       enabled={enabled}
+      acceptsDrop={acceptsDrop}
       onDragStateChange={onDragStateChange}
       onDropReceived={onDropReceived}
     />

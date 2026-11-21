@@ -7,7 +7,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cleanupIncomingSession, type IncomingSessionMeta, type ProgressInfo } from 'native-util';
 import { QuickLoadingPage } from '@/components/QuickLoadingPage';
-import { uploadIncomingSession } from '@/services/sync/incomingContentUpload';
+import {
+  canRetryIncomingUpload,
+  uploadIncomingSession,
+} from '@/services/sync/incomingContentUpload';
 
 interface DirectShareReceiveScreenProps {
   session: IncomingSessionMeta;
@@ -58,6 +61,7 @@ export const DirectShareReceiveScreen: React.FC<DirectShareReceiveScreenProps> =
       previewText={previewText}
       previewImage={previewImage}
       overlayMode={overlayMode}
+      allowRetry={canRetryIncomingUpload}
     />
   );
 };

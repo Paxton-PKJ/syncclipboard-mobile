@@ -5,7 +5,10 @@ import { useTranslation } from 'react-i18next';
 import { cleanupIncomingSession, type IncomingSessionMeta, type ProgressInfo } from 'native-util';
 import { useTheme } from '@/hooks/useTheme';
 import { QuickLoadingPage } from '@/components/QuickLoadingPage';
-import { uploadIncomingSession } from '@/services/sync/incomingContentUpload';
+import {
+  canRetryIncomingUpload,
+  uploadIncomingSession,
+} from '@/services/sync/incomingContentUpload';
 import { networkAutoSwitchService } from '@/services/NetworkAutoSwitchService';
 import { useMessageStore } from '@/stores/messageStore';
 
@@ -120,7 +123,7 @@ export const DropUploadOverlay: React.FC<DropUploadOverlayProps> = ({ session, o
       previewText={previewText}
       previewImage={previewImage}
       overlayMode
-      allowRetry={session.kind !== 'unsupported_mixed'}
+      allowRetry={canRetryIncomingUpload}
     />
   );
 };

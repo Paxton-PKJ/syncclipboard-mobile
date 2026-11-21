@@ -627,6 +627,7 @@ const zh = {
   },
 
   shareReceive: {
+    stageAgain: '无法读取传入内容，请重新分享或拖入。',
     processingFile: '正在处理文件…',
     stagingFile: '正在读取文件…',
     stagingMultipleFiles: '正在读取 {{count}} 个文件…',

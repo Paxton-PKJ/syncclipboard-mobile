@@ -120,6 +120,9 @@ class NativeUtilModule : Module() {
             Prop("enabled") { view: DropTargetView, enabled: Boolean ->
                 view.dropEnabled = enabled
             }
+            Prop("acceptsDrop") { view: DropTargetView, acceptsDrop: Boolean ->
+                view.acceptsDrop = acceptsDrop
+            }
         }
 
         Events(

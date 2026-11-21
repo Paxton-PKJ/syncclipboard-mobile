@@ -17,6 +17,7 @@ import { setRemoteClipboard } from '@/services/sync/ClipboardSyncActions';
 import type { ClipboardContent } from '@/types/clipboard';
 
 export type IncomingTranslationKey =
+  | 'shareReceive.stageAgain'
   | 'shareReceive.noContent'
   | 'shareReceive.emptyText'
   | 'shareReceive.stagingFile'
@@ -74,6 +75,13 @@ const defaultDeps: IncomingUploadDeps = {
   setRemoteClipboard,
 };
 
+/** 当前会话无法再产生可上传的内容。 */
+class UnavailableIncomingContentError extends Error {}
+
+export function canRetryIncomingUpload(error: Error): boolean {
+  return !(error instanceof UnavailableIncomingContentError);
+}
+
 /**
  * 共享的外部传入内容（系统分享 / 拖放）上传编排：
  * 等待原生后台暂存完成 → 构建 ClipboardContent → 上传到远程剪贴板并同步历史记录。
@@ -88,11 +96,11 @@ export async function uploadIncomingSession(
   const { setLoadingText, setProgress, setPreviewText, setPreviewImage, t } = callbacks;
 
   if (session.kind === 'unsupported_mixed') {
-    throw new Error(t('dropReceive.mixedContentUnsupported'));
+    throw new UnavailableIncomingContentError(t('dropReceive.mixedContentUnsupported'));
   }
 
   if (!session.sessionId || session.kind === 'empty') {
-    throw new Error(t('shareReceive.noContent'));
+    throw new UnavailableIncomingContentError(t('shareReceive.noContent'));
   }
 
   if (session.kind === 'text') {
@@ -110,30 +118,41 @@ export async function uploadIncomingSession(
   }
 
   try {
-    const payload = await deps.awaitSession(session.sessionId, signal, (event) => {
-      if (event.totalFiles > 1) {
-        setLoadingText(
-          t('shareReceive.stagingFileProgress', {
-            current: event.currentFile,
-            total: event.totalFiles,
-          })
+    const payload = await deps
+      .awaitSession(session.sessionId, signal, (event) => {
+        if (event.totalFiles > 1) {
+          setLoadingText(
+            t('shareReceive.stagingFileProgress', {
+              current: event.currentFile,
+              total: event.totalFiles,
+            })
+          );
+        } else {
+          setLoadingText(t('shareReceive.stagingFile'));
+        }
+        setProgress({
+          progress: event.totalBytes > 0 ? Math.min(1, event.bytesCopied / event.totalBytes) : -1,
+          bytesTransferred: event.bytesCopied,
+          totalBytes: event.totalBytes,
+        });
+      })
+      .catch((error: unknown) => {
+        if (signal.aborted) throw error;
+        const hint = t('shareReceive.stageAgain');
+        throw new UnavailableIncomingContentError(
+          error instanceof Error
+            ? `${hint}
+${error.message}`
+            : hint
         );
-      } else {
-        setLoadingText(t('shareReceive.stagingFile'));
-      }
-      setProgress({
-        progress: event.totalBytes > 0 ? Math.min(1, event.bytesCopied / event.totalBytes) : -1,
-        bytesTransferred: event.bytesCopied,
-        totalBytes: event.totalBytes,
       });
-    });
 
     setProgress(null);
 
     if (payload.type === 'text') {
       const text = payload.text ?? '';
       if (!text.trim()) {
-        throw new Error(t('shareReceive.emptyText'));
+        throw new UnavailableIncomingContentError(t('shareReceive.emptyText'));
       }
       setLoadingText(t('shareReceive.uploadingText'));
       setPreviewText(text.slice(0, 100));
@@ -192,7 +211,7 @@ export async function uploadIncomingSession(
       return;
     }
 
-    throw new Error(t('shareReceive.noContent'));
+    throw new UnavailableIncomingContentError(t('shareReceive.noContent'));
   } catch (error) {
     if (signal.aborted) {
       deps.cleanupSession(session.sessionId);
