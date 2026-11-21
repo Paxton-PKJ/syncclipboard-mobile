@@ -163,7 +163,7 @@ class DragGestureSurfaceView(context: Context, appContext: AppContext) : DragHos
         current.started = true
         val started = runCatching {
             val marker = sourceMarker?.get()?.takeIf { it.sourceId == current.sourceId }
-            startDragAndDrop(batch.clipData, BatchShadow(marker, batch.clipData.itemCount), null,
+            startDragAndDrop(batch.clipData, BatchShadow(marker, batch.clipData.itemCount), INTERNAL_DRAG_LOCAL_STATE,
                 View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
         }.getOrDefault(false)
         if (started) {
@@ -244,5 +244,6 @@ class DragGestureSurfaceView(context: Context, appContext: AppContext) : DragHos
 
     companion object {
         private val ids = AtomicInteger()
+        private const val INTERNAL_DRAG_LOCAL_STATE = "syncclipboard_internal_drag"
     }
 }
