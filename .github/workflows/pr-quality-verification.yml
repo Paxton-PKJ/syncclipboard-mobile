@@ -1,0 +1,105 @@
+name: Verify feature PR readiness
+on:
+  push:
+    branches: [verify/pr-scope-3c4baf0]
+permissions:
+  contents: read
+jobs:
+  javascript:
+    name: ${{ matrix.target }} / JavaScript
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: standalone-sync, sha: 93f80c51ad07039e59cec9d50a3453cbee0e89b6}
+          - {target: drag-out, sha: 095c7ca24151296c409c63c2f147e246dd1c0e24}
+          - {target: incoming, sha: 7c7198e61f5ad8a558f1b5c47cc275c19217f6db}
+          - {target: integration, sha: 3c4baf07ba7fbad4e7008ac430dce77323d0d29c}
+    steps:
+      - uses: actions/checkout@v6
+        with: {ref: '${{ matrix.sha }}', fetch-depth: 2}
+      - uses: actions/setup-node@v6
+        with: {node-version: 20, cache: npm}
+      - run: npm ci
+      - run: npm run lint && npm run format-docs:check && npm run type-check
+      - run: npm run test:coverage -- --runInBand --silent
+  android:
+    name: ${{ matrix.target }} / Android release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: standalone-sync, sha: 93f80c51ad07039e59cec9d50a3453cbee0e89b6}
+          - {target: drag-out, sha: 095c7ca24151296c409c63c2f147e246dd1c0e24}
+          - {target: incoming, sha: 7c7198e61f5ad8a558f1b5c47cc275c19217f6db}
+          - {target: integration, sha: 3c4baf07ba7fbad4e7008ac430dce77323d0d29c}
+    steps:
+      - uses: actions/checkout@v6
+        with: {ref: '${{ matrix.sha }}', fetch-depth: 2}
+      - uses: actions/setup-node@v6
+        with: {node-version: 20, cache: npm}
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: 17}
+      - uses: gradle/actions/setup-gradle@v6
+      - run: npm ci && npx expo prebuild --platform android --no-install
+      - name: Confirm new share regressions fail against the previous parser
+        if: matrix.target == 'incoming'
+        working-directory: android
+        run: |
+          parser=../modules/native-util/android/src/main/java/expo/modules/nativeutil/IncomingContentParser.kt
+          git restore --source=HEAD^ -- "$parser"
+          if bash gradlew :native-util:testReleaseUnitTest --tests '*IncomingContentParserClipDataTest' --console=plain; then exit 1; fi
+          python - <<'PYTHON'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          report=next(Path('../modules/native-util/android/build/test-results/testReleaseUnitTest').glob('*IncomingContentParserClipDataTest.xml'))
+          failures=[t.get('name') for t in ET.parse(report).iter('testcase') if t.find('failure') is not None]
+          assert len(failures)==3, failures
+          PYTHON
+          git restore -- "$parser"
+      - name: Run repository Android release unit tests
+        working-directory: android
+        run: bash gradlew -I ../.github/gradle/local-unit-tests.gradle testLocalReleaseUnitTest --console=plain
+      - name: Assemble all release APKs
+        working-directory: android
+        run: bash gradlew :app:assembleRelease --console=plain
+      - name: Check release outputs
+        working-directory: android/app/build/outputs/apk/release
+        run: for abi in arm64-v8a armeabi-v7a x86_64 universal; do test -s "app-$abi-release.apk" || exit 1; done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-emulator-release
+          path: android/app/build/outputs/apk/release/app-x86_64-release.apk
+          if-no-files-found: error
+      - name: Build device tests for the integrated app
+        if: matrix.target == 'integration' || matrix.target == 'drag-out'
+        working-directory: android
+        run: bash gradlew :native-util:assembleDebugAndroidTest -PreactNativeArchitectures=x86_64 --console=plain
+      - uses: actions/upload-artifact@v7
+        if: matrix.target == 'integration' || matrix.target == 'drag-out'
+        with:
+          name: ${{ matrix.target }}-instrumentation
+          path: modules/native-util/android/build/outputs/apk/androidTest/debug/*.apk
+          if-no-files-found: error
+  fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build disposable external drag and share source
+        working-directory: .github/drop-source
+        run: |
+          set -eu
+          jar="$ANDROID_HOME/platforms/android-35/android.jar"
+          bt="$ANDROID_HOME/build-tools/35.0.0"
+          mkdir classes dex
+          javac --release 8 -cp "$jar" -d classes *.java
+          "$bt/d8" --lib "$jar" --min-api 24 --output dex classes/test/clipboard/source/*.class
+          "$bt/aapt2" link -I "$jar" --manifest AndroidManifest.xml -o unsigned.apk
+          (cd dex && zip -q ../unsigned.apk classes.dex)
+          "$bt/zipalign" -f 4 unsigned.apk fixture.apk
+          keytool -genkeypair -alias fixture -keyalg RSA -keystore fixture.jks -storepass android -keypass android -dname CN=fixture -validity 30
+          "$bt/apksigner" sign --ks fixture.jks --ks-pass pass:android fixture.apk
+      - uses: actions/upload-artifact@v7
+        with: {name: external-drop-fixture, path: .github/drop-source/fixture.apk}
