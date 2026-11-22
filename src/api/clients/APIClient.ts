@@ -67,8 +67,7 @@ export interface ISyncClipboardAPI {
     fileName: string,
     destinationUri: string,
     signal?: AbortSignal,
-    onProgress?: DownloadProgressCallback,
-    maxBytes?: number
+    onProgress?: DownloadProgressCallback
   ): Promise<string>;
 
   /** 上传文件数据 */
@@ -395,8 +394,7 @@ export abstract class APIClient {
     fileName: string,
     destinationUri: string,
     signal?: AbortSignal,
-    onProgress?: DownloadProgressCallback,
-    maxBytes?: number
+    onProgress?: DownloadProgressCallback
   ): Promise<string> {
     if (!fileName) {
       throw new ConfigurationError('File name is required');
@@ -411,11 +409,7 @@ export abstract class APIClient {
 
       console.log(`[${this.constructor.name}] Downloading file ${fileName} to ${destinationUri}`);
 
-      if (maxBytes !== undefined) {
-        await nativeDownloadFile(url, headers, destinationUri, signal, onProgress, maxBytes);
-      } else {
-        await nativeDownloadFile(url, headers, destinationUri, signal, onProgress);
-      }
+      await nativeDownloadFile(url, headers, destinationUri, signal, onProgress);
 
       console.log(`[${this.constructor.name}] File downloaded successfully: ${fileName}`);
       return destinationUri;

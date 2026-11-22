@@ -17,7 +17,6 @@ export interface HistoryRecordDto {
   lastAccessed?: string;
   starred?: boolean;
   pinned?: boolean;
-  /** Text 为完整 UTF-16 字符数，其他类型为文件字节数 */
   size?: number;
   hasData?: boolean;
   version?: number;

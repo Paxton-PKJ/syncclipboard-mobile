@@ -22,7 +22,7 @@ export async function contentToProfileDto(
   content: ClipboardContent,
   options?: ContentToProfileDtoOptions
 ): Promise<ProfileDto> {
-  let { type, text = '', profileHash, fileName, fileSize, fileUri, textLength } = content;
+  let { type, text = '', profileHash, fileName, fileSize, fileUri } = content;
 
   if (!profileHash) {
     profileHash = await calculateContentHash(content, options?.signal);
@@ -37,16 +37,10 @@ export async function contentToProfileDto(
           hash: profileHash,
           hasData: true,
           dataName: fileName,
-          size: textLength,
+          size: fileSize,
         };
       }
-      return {
-        type: 'Text',
-        text,
-        hash: profileHash,
-        hasData: false,
-        size: textLength ?? text.length,
-      };
+      return { type: 'Text', text, hash: profileHash, hasData: false };
     }
     case 'Image':
       return {
@@ -97,12 +91,7 @@ export function profileDtoToContent(profile: ProfileDto): ClipboardContent {
   if (hasData) {
     switch (type) {
       case 'Text':
-        // TextProfile.Size 是字符数，远端元数据不能用作本地文件字节数；缺失时保持 undefined，不用预览长度冒充完整长度。
-        return {
-          ...baseContent,
-          fileName: dataName,
-          textLength: typeof size === 'number' && size > 0 ? size : undefined,
-        };
+        return { ...baseContent, fileName: dataName, fileSize: size || text?.length || 0 };
       case 'Image':
         return { ...baseContent, fileName: dataName, fileSize: size };
       case 'File':
@@ -112,7 +101,7 @@ export function profileDtoToContent(profile: ProfileDto): ClipboardContent {
   }
 
   if (type === 'Text') {
-    return { ...baseContent, textLength: text?.length ?? 0 };
+    return { ...baseContent, fileSize: size || text?.length || 0 };
   }
 
   return baseContent;
@@ -198,12 +187,7 @@ export function clipboardContentToItem(
     localClipboardHash: content.localClipboardHash,
     hasData: content.hasData,
     dataName: content.fileName,
-    size:
-      content.type === 'Text'
-        ? content.hasData
-          ? content.textLength
-          : (content.textLength ?? content.text.length)
-        : content.fileSize,
+    size: content.fileSize,
     timestamp: content.timestamp || Date.now(),
     fileUri: content.fileUri,
     ...overrides,
@@ -216,15 +200,7 @@ export function historyItemToContent(item: HistoryItem): ClipboardContent {
     text: item.text,
     fileUri: item.fileUri,
     fileName: item.dataName,
-    fileSize: item.type === 'Text' ? undefined : item.size,
-    textLength:
-      item.type === 'Text'
-        ? item.hasData
-          ? typeof item.size === 'number' && item.size > 0
-            ? item.size
-            : undefined
-          : (item.size ?? item.text.length)
-        : undefined,
+    fileSize: item.size,
     profileHash: item.profileHash,
     localClipboardHash: item.localClipboardHash,
     hasData: item.hasData,
