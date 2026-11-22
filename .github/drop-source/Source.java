@@ -23,7 +23,10 @@ public class Source extends Activity {
                 .setClassName("com.jericx.syncclipboardmobile", "com.jericx.syncclipboardmobile.share.ShareActivity")
                 .putExtra(Intent.EXTRA_TEXT, getIntent().getStringExtra("link"))
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            share.setClipData(clip);
+            Uri preview = Uri.parse("content://test.clipboard.source.files/favicon");
+            ClipData previewClip = ClipData.newUri(getContentResolver(), "preview", preview);
+            if (getIntent().getBooleanExtra("withStream", false)) previewClip.addItem(new ClipData.Item(uri));
+            share.setClipData(previewClip);
             if (getIntent().getBooleanExtra("withStream", false)) share.putExtra(Intent.EXTRA_STREAM, uri);
             startActivity(share);
             finish();
