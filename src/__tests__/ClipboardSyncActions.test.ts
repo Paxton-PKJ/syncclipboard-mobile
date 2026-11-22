@@ -1,5 +1,3 @@
-import { File } from 'expo-file-system';
-import { DownloadSizeLimitExceededError } from '../errors';
 import type { ClipboardContent } from '../types/clipboard';
 
 const mockDownloadData = jest.fn();
@@ -64,12 +62,7 @@ jest.mock('../services/clipboard/LocalClipboard', () => ({
   },
 }));
 
-import {
-  downloadRemoteClipboard,
-  setRemoteClipboard,
-  setLocalClipboardFromRemote,
-} from '../services/sync/ClipboardSyncActions';
-import { localClipboard } from '../services/clipboard/LocalClipboard';
+import { downloadRemoteClipboard, setRemoteClipboard } from '../services/sync/ClipboardSyncActions';
 import { configService } from '../services/ConfigService';
 import { networkAutoSwitchService } from '../services/NetworkAutoSwitchService';
 import { remoteClipboardMonitor } from '../services/sync/RemoteClipboardMonitor';
@@ -124,94 +117,6 @@ describe('downloadRemoteClipboard', () => {
     expect(remoteClipboardMonitor.fetchLatest).not.toHaveBeenCalled();
     expect(mockDownloadData).toHaveBeenCalledWith(
       remoteContent,
-      expect.any(Function),
-      expect.any(AbortSignal)
-    );
-  });
-
-  it('手动复制字符大小未知的远端文本时先下载完整文件', async () => {
-    const remote: ClipboardContent = {
-      type: 'Text',
-      text: 'preview',
-      hasData: true,
-      fileName: 'full.txt',
-      profileHash: 'remote-text',
-    };
-    const downloaded = { ...remote, fileUri: 'file:///full.txt' };
-    mockDownloadData.mockResolvedValue(downloaded);
-    await setLocalClipboardFromRemote(undefined, undefined, remote);
-    expect(mockDownloadData).toHaveBeenCalledWith(
-      remote,
-      expect.any(Function),
-      expect.any(AbortSignal)
-    );
-    expect(localClipboard.setClipboardContent).toHaveBeenCalledWith(downloaded, true);
-  });
-
-  it('自动下载复用手动下载时保留手动操作，仅向限额调用者报告超限', async () => {
-    const result = { ...remoteContent, fileUri: 'file:///remote.png' };
-    let complete!: (value: ClipboardContent) => void;
-    const transfer = new Promise<ClipboardContent>((resolve) => {
-      complete = resolve;
-    });
-    mockDownloadData.mockReturnValueOnce(transfer);
-    jest.mocked(File).mockImplementationOnce(() => ({ exists: true, size: 12 }) as File);
-    const manual = downloadRemoteClipboard(remoteContent);
-    await Promise.resolve();
-    const limited = downloadRemoteClipboard(remoteContent, undefined, undefined, { maxBytes: 10 });
-    await Promise.resolve();
-    complete(result);
-    await expect(manual).resolves.toEqual(result);
-    await expect(limited).rejects.toThrow(DownloadSizeLimitExceededError);
-    expect(mockDownloadData).toHaveBeenCalledTimes(1);
-    expect(mockDownloadData.mock.calls[0][2].aborted).toBe(false);
-  });
-
-  it('将 maxBytes 硬上限透传给底层下载，且手动无上限下载不会复用有上限的进行中下载', async () => {
-    const remoteText: ClipboardContent = {
-      type: 'Text',
-      text: 'preview',
-      hasData: true,
-      fileName: 'large.txt',
-      profileHash: 'capped-vs-uncapped',
-      textLength: 2_000_000,
-    };
-
-    const cappedLimit = 5 * 1024 * 1024;
-    let firstSignal: AbortSignal | undefined;
-    let rejectFirst: (err: Error) => void = () => {};
-    mockDownloadData
-      .mockImplementationOnce(
-        (_c: ClipboardContent, _p: unknown, sig: AbortSignal) =>
-          new Promise((_resolve, reject) => {
-            firstSignal = sig;
-            rejectFirst = reject;
-          })
-      )
-      .mockResolvedValueOnce({ ...remoteText, fileUri: 'file:///large.txt' });
-
-    const cappedPromise = downloadRemoteClipboard(remoteText, undefined, undefined, {
-      maxBytes: cappedLimit,
-    });
-    await Promise.resolve();
-    expect(mockDownloadData).toHaveBeenNthCalledWith(
-      1,
-      remoteText,
-      expect.any(Function),
-      expect.any(AbortSignal),
-      cappedLimit
-    );
-
-    const uncappedPromise = downloadRemoteClipboard(remoteText);
-    await Promise.resolve();
-    expect(firstSignal?.aborted).toBe(true);
-    rejectFirst(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
-
-    await expect(cappedPromise).rejects.toThrow('Aborted');
-    await expect(uncappedPromise).resolves.toEqual({ ...remoteText, fileUri: 'file:///large.txt' });
-    expect(mockDownloadData).toHaveBeenNthCalledWith(
-      2,
-      remoteText,
       expect.any(Function),
       expect.any(AbortSignal)
     );

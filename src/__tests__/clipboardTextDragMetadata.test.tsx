@@ -1,7 +1,6 @@
 import React from 'react';
 // @ts-expect-error React Native provides the renderer without its type declarations.
 import TestRenderer, { act } from 'react-test-renderer';
-import { Text } from 'react-native';
 import { CurrentClipboardCard } from '../components/CurrentClipboardCard';
 import { profileDtoToContent } from '../utils/clipboard/convert';
 import { downloadForStorage } from '../services/client/StorageClient';
@@ -81,16 +80,6 @@ afterEach(async () => {
   jest.useRealTimers();
 });
 
-function displaysLabel(label: string): boolean {
-  return root!.root
-    .findAllByType(Text)
-    .some((node: { props: { children: unknown } }) => node.props.children === label);
-}
-
-function displaysCount(count: number): boolean {
-  return displaysLabel(count.toLocaleString('zh-CN'));
-}
-
 async function requestDrag() {
   const surface = root!.root.findByType('DragGestureSurface');
   const source = root!.root.findByType('DragSource');
@@ -100,77 +89,6 @@ async function requestDrag() {
     })
   );
 }
-
-it('displays full remote character metadata when available and hides preview length when missing', async () => {
-  const preview = '预览文本🚀';
-  const withSize = profileDtoToContent({
-    type: 'Text',
-    text: preview,
-    hash: 'remote-hash',
-    hasData: true,
-    dataName: 'remote.txt',
-    size: 40000,
-  });
-  await act(async () => {
-    root = TestRenderer.create(
-      <CurrentClipboardCard clipboard={withSize} isRemote onCopy={jest.fn()} />
-    );
-  });
-  expect(displaysCount(40000)).toBe(true);
-
-  for (const size of [0, undefined] as const) {
-    const unknownSize = profileDtoToContent({
-      type: 'Text',
-      text: preview,
-      hash: `remote-hash-${String(size)}`,
-      hasData: true,
-      dataName: 'remote.txt',
-      size,
-    });
-    await act(async () => {
-      root!.update(<CurrentClipboardCard clipboard={unknownSize} isRemote onCopy={jest.fn()} />);
-    });
-    expect(displaysCount(preview.length)).toBe(false);
-    expect(displaysLabel(String(preview.length))).toBe(false);
-  }
-});
-
-it('displays file byte size for external text when character length is unknown and character count for inline text', async () => {
-  const preview = '预览文本🚀';
-  await act(async () => {
-    root = TestRenderer.create(
-      <CurrentClipboardCard
-        clipboard={{
-          type: 'Text',
-          text: preview,
-          hasData: true,
-          fileUri: 'file:///cache/remote.txt',
-          fileName: 'remote.txt',
-          fileSize: 2048,
-        }}
-        isRemote
-        onCopy={jest.fn()}
-      />
-    );
-  });
-  expect(displaysLabel('2.0 KB')).toBe(true);
-  expect(displaysCount(preview.length)).toBe(false);
-
-  const inlineText = '完整内联🚀';
-  await act(async () => {
-    root!.update(
-      <CurrentClipboardCard
-        clipboard={{
-          type: 'Text',
-          text: inlineText,
-          hasData: false,
-        }}
-        onCopy={jest.fn()}
-      />
-    );
-  });
-  expect(displaysCount(inlineText.length)).toBe(true);
-});
 
 it('drags downloaded WebDAV Unicode text by hash without passing character counts as bytes', async () => {
   // 刚超过桌面端的 10KB 预览阈值；只需少量中文和 emoji，卡片渲染短预览。
@@ -197,17 +115,15 @@ it('drags downloaded WebDAV Unicode text by hash without passing character count
   });
   await requestDrag();
   expect(mockStartDrag).toHaveBeenCalledWith(7, [{ id: hash, kind: 'textFile', fileUri: uri }]);
-  expect(displaysCount(full.length)).toBe(true);
 });
 
-it('keeps local text file bytes out of the drag payload and displays the complete character count', async () => {
+it('does not pass local text size metadata as a byte count', async () => {
   const content = {
     type: 'Text' as const,
     text: 'local preview...',
     hasData: true,
     fileUri: 'file:///cache/full.txt',
     fileSize: 1012,
-    textLength: 1001,
   };
   await act(async () => {
     root = TestRenderer.create(<CurrentClipboardCard clipboard={content} onCopy={jest.fn()} />);
@@ -216,21 +132,4 @@ it('keeps local text file bytes out of the drag payload and displays the complet
   expect(mockStartDrag).toHaveBeenCalledWith(7, [
     { id: 'clipboard-text', kind: 'textFile', fileUri: content.fileUri },
   ]);
-  expect(displaysCount(1001)).toBe(true);
-});
-
-it('shows character counts for remote text metadata instead of byte units', async () => {
-  const content = profileDtoToContent({
-    type: 'Text',
-    text: 'preview...',
-    hash: 'hash',
-    hasData: true,
-    size: 4096,
-  });
-  await act(async () => {
-    root = TestRenderer.create(
-      <CurrentClipboardCard clipboard={content} isRemote onCopy={jest.fn()} />
-    );
-  });
-  expect(displaysCount(4096)).toBe(true);
 });

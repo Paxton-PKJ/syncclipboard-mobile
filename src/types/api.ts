@@ -27,7 +27,7 @@ export interface ProfileDto {
   /** 数据文件名 */
   dataName?: string;
 
-  /** Text 为 UTF-16 字符数（string.length），其他类型为文件字节数 */
+  /** 文件大小（字节） */
   size?: number;
 }
 

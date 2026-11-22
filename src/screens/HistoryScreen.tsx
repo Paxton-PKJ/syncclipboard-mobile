@@ -62,7 +62,6 @@ import { getHistoryTransferQueue } from '@/services/history/HistoryTransferQueue
 import { getProfileId } from '@/utils/clipboard/profileId';
 import { File } from 'expo-file-system';
 import { HistoryGestureList } from './history/HistoryGestureList';
-import { localClipboard } from '@/services/clipboard/LocalClipboard';
 
 export function HistoryScreen() {
   const navigation = useNavigation();
@@ -239,11 +238,17 @@ export function HistoryScreen() {
   // ClipboardItem 转换为 ClipboardContent 后调用公共复制函数
   const copyItemWithSync = useCallback(async (item: HistoryItem) => {
     const content: ClipboardContent = {
-      ...historyItemToContent(item),
+      type: item.type,
+      text: item.text,
+      profileHash: item.profileHash,
+      fileUri: item.fileUri,
+      fileName: item.dataName,
+      fileSize: item.size,
       timestamp: item.timestamp,
       localClipboardHash: item.localClipboardHash,
       hasData: item.hasData,
     };
+    const { localClipboard } = await import('@/services');
     await localClipboard.setClipboardContent(content);
     // 更新 lastAccessed，使按访问时间排序时记录移到顶部
     historyStorage.updateLastAccessed(item.profileHash);

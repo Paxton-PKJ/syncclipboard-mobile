@@ -247,27 +247,6 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
     return '';
   };
 
-  /** 标题栏大小标签；无可靠大小信息时返回 null，避免渲染空 Text 或误把预览长度当成全文长度。 */
-  const getSizeLabel = (): string | null => {
-    if (clipboard.type !== 'Text') {
-      return clipboard.fileSize !== undefined
-        ? formatSizeWithType(clipboard.fileSize, clipboard.type) || null
-        : null;
-    }
-    if (clipboard.textLength !== undefined && clipboard.textLength > 0) {
-      return formatSizeWithType(clipboard.textLength, 'Text') || null;
-    }
-    if (clipboard.hasData) {
-      return clipboard.fileSize !== undefined && clipboard.fileSize > 0
-        ? formatSizeWithType(clipboard.fileSize) || null
-        : null;
-    }
-    return clipboard.text.length > 0
-      ? formatSizeWithType(clipboard.text.length, 'Text') || null
-      : null;
-  };
-
-  const sizeLabel = getSizeLabel();
   const previewText = getPreviewText();
   const isLongText = previewText.length > 200;
 
@@ -449,8 +428,10 @@ export const CurrentClipboardCard: React.FC<CurrentClipboardCardProps> = ({
           </View>
         </View>
 
-        {sizeLabel !== null && (
-          <Text style={[styles.sizeLabel, { color: theme.colors.textSecondary }]}>{sizeLabel}</Text>
+        {clipboard.fileSize !== undefined && (
+          <Text style={[styles.sizeLabel, { color: theme.colors.textSecondary }]}>
+            {formatSizeWithType(clipboard.fileSize, clipboard.type)}
+          </Text>
         )}
       </View>
 
