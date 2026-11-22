@@ -13,6 +13,7 @@ import {
   type CreateContentFromFileOptions,
   type MultipleFileEntry,
 } from '@/utils/clipboard/clipboardContentUtils';
+import { prepareIncomingHistoryFile } from './incomingHistoryFile';
 import { setRemoteClipboard } from '@/services/sync/ClipboardSyncActions';
 import type { ClipboardContent } from '@/types/clipboard';
 
@@ -72,7 +73,8 @@ const defaultDeps: IncomingUploadDeps = {
   createContentFromText,
   createContentFromFile,
   createContentFromMultipleFiles,
-  setRemoteClipboard,
+  setRemoteClipboard: (content, signal, onProgress) =>
+    setRemoteClipboard(content, signal, onProgress, prepareIncomingHistoryFile),
 };
 
 /** 当前会话无法再产生可上传的内容。 */

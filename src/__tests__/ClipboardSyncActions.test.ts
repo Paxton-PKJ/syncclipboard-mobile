@@ -97,7 +97,7 @@ describe('setRemoteClipboard', () => {
     );
   });
 
-  it('使用经 addLocalContent 校验后的持久化历史 URI 执行上传与状态更新', async () => {
+  it('普通上传沿用来源 URI，历史记录返回的 URI 不改变上传内容', async () => {
     const sourceContent: ClipboardContent = {
       type: 'Image',
       text: 'photo.png',
@@ -118,14 +118,11 @@ describe('setRemoteClipboard', () => {
     await setRemoteClipboard(sourceContent, new AbortController().signal);
 
     expect(mockSetRemoteClipboard).toHaveBeenCalledWith(
-      { ...sourceContent, fileUri: persistedHistoryUri },
+      sourceContent,
       expect.any(Function),
       expect.any(AbortSignal)
     );
-    expect(clipboardSyncState.setRemoteContent).toHaveBeenCalledWith({
-      ...sourceContent,
-      fileUri: persistedHistoryUri,
-    });
+    expect(clipboardSyncState.setRemoteContent).toHaveBeenCalledWith(sourceContent);
   });
 });
 

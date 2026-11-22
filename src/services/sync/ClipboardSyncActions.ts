@@ -39,7 +39,8 @@ const _downloadOp = new DedupedOperation<ClipboardContent, ClipboardContent | nu
 export async function setRemoteClipboard(
   content: ClipboardContent,
   signal: AbortSignal,
-  onProgress?: (info: ProgressInfo) => void
+  onProgress?: (info: ProgressInfo) => void,
+  prepareContent?: (content: ClipboardContent) => Promise<ClipboardContent>
 ): Promise<boolean> {
   // 设置刚上传的 hash，防止上传的内容被立即下载回来（竞态条件）
   const profileHash = content.profileHash || content.text;
@@ -53,17 +54,11 @@ export async function setRemoteClipboard(
     const server = await configService.getActiveServer();
     if (!server) throw new Error(i18n.t('common.serverNotConfigured'));
 
-    const savedHistory = await historyService.addLocalContent(content);
-
-    // 优先使用经哈希校验/原子写入后的持久化历史文件 URI，避免临时源文件被截断或随后清理
-    const persistentContent =
-      savedHistory?.fileUri && savedHistory.fileUri !== content.fileUri
-        ? { ...content, fileUri: savedHistory.fileUri }
-        : content;
-
-    await getClientService().setRemoteClipboard(persistentContent, notify, sig);
-
-    clipboardSyncState.setRemoteContent(persistentContent);
+    const uploadContent = prepareContent ? await prepareContent(content) : content;
+    if (sig.aborted) throw new DOMException('Aborted', 'AbortError');
+    await historyService.addLocalContent(uploadContent);
+    await getClientService().setRemoteClipboard(uploadContent, notify, sig);
+    clipboardSyncState.setRemoteContent(uploadContent);
 
     return true;
   });

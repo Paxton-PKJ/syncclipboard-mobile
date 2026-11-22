@@ -97,13 +97,13 @@ jest.mock('@/i18n', () => ({
   default: { t: (key: string) => key },
 }));
 
-import { historyService } from '../services/history/HistoryService';
+import { prepareIncomingHistoryFile } from '../services/sync/incomingHistoryFile';
 import { setRemoteClipboard } from '../services/sync/ClipboardSyncActions';
 import { clipboardSyncState } from '../services/sync/SyncState';
 
 const encoder = new TextEncoder();
 
-describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
+describe('传入会话的持久副本校验与修复', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockFiles.clear();
@@ -145,7 +145,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     const fileUri = `file:///cache/${fileName}`;
     mockFiles.set(fileUri, bytes);
     const profileHash = sha256(`${fileName}|${sha256(bytes).toUpperCase()}`).toUpperCase();
-    const saved = await historyService.addLocalContent({
+    const saved = await prepareIncomingHistoryFile({
       type: 'Image',
       text: fileName,
       fileName,
@@ -188,7 +188,12 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
       localClipboardHash: fullHash,
     };
 
-    await setRemoteClipboard(content, new AbortController().signal);
+    await setRemoteClipboard(
+      content,
+      new AbortController().signal,
+      undefined,
+      prepareIncomingHistoryFile
+    );
 
     // 上传使用完整源字节，而非截断的历史副本
     expect(uploadedBytes).toEqual(fullBytes);
@@ -214,7 +219,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     mockFiles.set(historyUri, corruptBytes);
     mockFiles.set(sourceUri, fullBytes);
 
-    const saved = await historyService.addLocalContent({
+    const saved = await prepareIncomingHistoryFile({
       type: 'Text',
       text: fullText,
       hasData: true,
@@ -240,7 +245,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     mockFiles.set(historyUri, new Uint8Array(fullBytes));
     mockFiles.set(sourceUri, fullBytes);
 
-    const saved = await historyService.addLocalContent({
+    const saved = await prepareIncomingHistoryFile({
       type: 'Text',
       text: fullText,
       hasData: true,
@@ -264,7 +269,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     mockFiles.set(imageHist, new Uint8Array([1, 2]));
     mockFiles.set(imageSrc, imageBytes);
 
-    await historyService.addLocalContent({
+    await prepareIncomingHistoryFile({
       type: 'Image',
       text: 'pic.png',
       hasData: true,
@@ -283,7 +288,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     mockFiles.set(groupHist, new Uint8Array([80, 75, 0, 0, 0, 0, 0, 0]));
     mockFiles.set(groupSrc, zipBytes);
 
-    await historyService.addLocalContent({
+    await prepareIncomingHistoryFile({
       type: 'Group',
       text: 'a.png\nb.png',
       hasData: true,
@@ -316,7 +321,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
       uploadedBytes = mockFiles.get(content.fileUri!);
     });
 
-    const saved = await historyService.addLocalContent({
+    const saved = await prepareIncomingHistoryFile({
       type: 'Text',
       text: validText,
       hasData: true,
@@ -343,7 +348,9 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
         profileHash: validHash,
         localClipboardHash: validHash,
       },
-      new AbortController().signal
+      new AbortController().signal,
+      undefined,
+      prepareIncomingHistoryFile
     );
 
     expect(uploadedBytes).toEqual(validBytes);
@@ -363,7 +370,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     mockFiles.set(sourceUri, encoder.encode('bad'));
 
     await expect(
-      historyService.addLocalContent({
+      prepareIncomingHistoryFile({
         type: 'Text',
         text: validText,
         hasData: true,
@@ -398,7 +405,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     });
 
     await expect(
-      historyService.addLocalContent({
+      prepareIncomingHistoryFile({
         type: 'Text',
         text: validText,
         hasData: true,
@@ -417,7 +424,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     (nativeReplaceFile as jest.Mock).mockRejectedValueOnce(new Error('IO rename error'));
 
     await expect(
-      historyService.addLocalContent({
+      prepareIncomingHistoryFile({
         type: 'Text',
         text: validText,
         hasData: true,
@@ -441,7 +448,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     mockFiles.set(fileHist, fileBytes);
     mockFiles.set(fileSrc, encoder.encode('tr'));
 
-    await historyService.addLocalContent({
+    await prepareIncomingHistoryFile({
       type: 'File',
       text: 'doc.bin',
       hasData: true,
@@ -461,7 +468,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     mockFiles.set(imageHist, imageBytes);
     mockFiles.set(imageSrc, new Uint8Array([1]));
 
-    await historyService.addLocalContent({
+    await prepareIncomingHistoryFile({
       type: 'Image',
       text: 'pic.png',
       hasData: true,
@@ -480,7 +487,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
     mockFiles.set(groupHist, zipBytes);
     mockFiles.set(groupSrc, new Uint8Array([80, 75]));
 
-    await historyService.addLocalContent({
+    await prepareIncomingHistoryFile({
       type: 'Group',
       text: 'a.png\nb.png',
       hasData: true,
@@ -576,7 +583,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
       fs.writeFileSync(histPath, validBytes);
       fs.writeFileSync(srcPath, encoder.encode('123'));
 
-      const saved = await historyService.addLocalContent({
+      const saved = await prepareIncomingHistoryFile({
         type: 'Text',
         text: validText,
         hasData: true,
@@ -594,7 +601,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
       fs.writeFileSync(histPath, encoder.encode('corrupt'));
       fs.writeFileSync(srcPath, validBytes);
 
-      await historyService.addLocalContent({
+      await prepareIncomingHistoryFile({
         type: 'Text',
         text: validText,
         hasData: true,
@@ -614,7 +621,7 @@ describe('HistoryService.addLocalContent 历史副本校验与修复', () => {
       (nativeReplaceFile as jest.Mock).mockRejectedValueOnce(new Error('disk full'));
 
       await expect(
-        historyService.addLocalContent({
+        prepareIncomingHistoryFile({
           type: 'Text',
           text: validText,
           hasData: true,

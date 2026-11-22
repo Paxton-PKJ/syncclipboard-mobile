@@ -81,6 +81,11 @@ object IncomingContentParser {
         val urlTexts = ArrayList<String>()
 
         if (action == Intent.ACTION_SEND) {
+            intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.let { text ->
+                return ParsedIncomingSource(
+                    ParsedIncomingSource.Kind.TEXT, text = text.toString(), declaredMimeType = declaredMime ?: "text/plain"
+                )
+            }
             IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)?.let {
                 classifyUri(it, fileUris, urlTexts)
             }
@@ -88,8 +93,6 @@ object IncomingContentParser {
             IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
                 ?.forEach { classifyUri(it, fileUris, urlTexts) }
         }
-
-        collectUrisFromClipData(intent.clipData, fileUris, urlTexts)
 
         if (fileUris.size == 1) {
             return ParsedIncomingSource(
@@ -344,18 +347,6 @@ object IncomingContentParser {
         return false
     }
 
-    private fun collectUrisFromClipData(
-        clipData: ClipData?,
-        fileUris: MutableSet<Uri>,
-        urlTexts: MutableList<String>
-    ) {
-        if (clipData == null) return
-        for (index in 0 until clipData.itemCount) {
-            val item = clipData.getItemAt(index) ?: continue
-            item.uri?.let { classifyUri(it, fileUris, urlTexts) }
-        }
-    }
-
     private fun extractShareText(
         intent: Intent,
         action: String,
@@ -381,7 +372,15 @@ object IncomingContentParser {
             return nonEmptyClipTexts.joinToString("\n")
         }
 
-        val nonEmptyUrlTexts = urlTexts.filter { it.isNotEmpty() }
+        // ClipData may contain a sharesheet thumbnail. Only non-file links are a text fallback.
+        val links = urlTexts.toMutableList()
+        intent.clipData?.let { clip ->
+            for (index in 0 until clip.itemCount) {
+                val uri = clip.getItemAt(index).uri ?: continue
+                if (uri.scheme?.lowercase(Locale.ROOT) !in setOf("content", "file")) links.add(uri.toString())
+            }
+        }
+        val nonEmptyUrlTexts = links.distinct().filter { it.isNotEmpty() }
         if (nonEmptyUrlTexts.isNotEmpty()) {
             return nonEmptyUrlTexts.joinToString("\n")
         }
