@@ -2,6 +2,7 @@ import type { ClipboardContent } from '@/types/clipboard';
 import type { ProgressInfo } from '@/types/progress';
 import type { ProgressDetail } from '@/types/progress';
 import { historyService } from '../history/HistoryService';
+import { checkDownloadedSize } from '../client/downloadSizeLimit';
 import { getClientService } from '../client/ClientService';
 import { configService } from '../ConfigService';
 import { remoteClipboardMonitor } from './RemoteClipboardMonitor';
@@ -21,9 +22,22 @@ function isSameContent(a: ClipboardContent, b: ClipboardContent): boolean {
   return a.fileName === b.fileName && a.fileSize === b.fileSize;
 }
 
+interface DownloadRequest {
+  content: ClipboardContent;
+  maxBytes?: number;
+}
+
+function canReuseDownload(request: DownloadRequest, running: DownloadRequest): boolean {
+  return (
+    isSameContent(request.content, running.content) &&
+    (running.maxBytes === undefined ||
+      (request.maxBytes !== undefined && request.maxBytes <= running.maxBytes))
+  );
+}
+
 const _uploadOp = new DedupedOperation<ClipboardContent, boolean, ProgressInfo>(isSameContent);
-const _downloadOp = new DedupedOperation<ClipboardContent, ClipboardContent | null, ProgressDetail>(
-  isSameContent
+const _downloadOp = new DedupedOperation<DownloadRequest, ClipboardContent | null, ProgressDetail>(
+  canReuseDownload
 );
 
 /**
@@ -90,6 +104,11 @@ export function cancelUploadLocalClipboard(): void {
   _uploadOp.abort();
 }
 
+export interface DownloadRemoteClipboardOptions {
+  /** 可选硬字节上限；仅用于大小不确定的远端文本自动下载。 */
+  maxBytes?: number;
+}
+
 /**
  * 下载远程剪贴板文件，并同步更新 UI 下载进度状态（downloadingRemote / downloadProgress）。
  * - 若与正在进行的下载内容相同，则继承（共享进度），等待完成。
@@ -101,10 +120,13 @@ export function cancelUploadLocalClipboard(): void {
 export async function downloadRemoteClipboard(
   content?: ClipboardContent | null,
   onProgress?: (info: ProgressDetail) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: DownloadRemoteClipboardOptions
 ): Promise<ClipboardContent | null> {
   const actualContent = content ?? clipboardSyncState.getState().remoteContent;
   if (!actualContent) return null;
+
+  const maxBytes = options?.maxBytes;
 
   // 检查历史记录中是否已有该文件
   if (actualContent.profileHash) {
@@ -113,30 +135,36 @@ export async function downloadRemoteClipboard(
       const cachedFile = new File(cachedItem.fileUri);
       if (cachedFile.exists) {
         const result = { ...actualContent, fileUri: cachedItem.fileUri };
-        return result;
+        return checkDownloadedSize(result, maxBytes);
       }
     }
   }
 
-  return _downloadOp.execute(actualContent, onProgress, signal ?? null, async (sig, notify) => {
-    clipboardSyncState.setDownloadingRemote(true);
-    clipboardSyncState.setDownloadProgress(null);
-    try {
-      const result = await getClientService().downloadData(
-        actualContent,
-        (info: ProgressDetail) => {
+  const downloaded = await _downloadOp.execute(
+    { content: actualContent, maxBytes },
+    onProgress,
+    signal ?? null,
+    async (sig, notify) => {
+      clipboardSyncState.setDownloadingRemote(true);
+      clipboardSyncState.setDownloadProgress(null);
+      try {
+        const progressReporter = (info: ProgressDetail) => {
           clipboardSyncState.setDownloadProgress(info);
           notify(info);
-        },
-        sig
-      );
-      clipboardSyncState.setState({ remoteContent: result });
+        };
+        const result =
+          maxBytes !== undefined
+            ? await getClientService().downloadData(actualContent, progressReporter, sig, maxBytes)
+            : await getClientService().downloadData(actualContent, progressReporter, sig);
+        clipboardSyncState.setState({ remoteContent: result });
 
-      return result;
-    } finally {
-      clipboardSyncState.clearDownloadState();
+        return result;
+      } finally {
+        clipboardSyncState.clearDownloadState();
+      }
     }
-  });
+  );
+  return downloaded && checkDownloadedSize(downloaded, maxBytes);
 }
 
 /**
@@ -179,7 +207,7 @@ export async function setLocalClipboardFromRemote(
   const needsDownload =
     content.hasData &&
     content.fileName !== undefined &&
-    content.fileSize !== undefined &&
+    (content.type === 'Text' || content.fileSize !== undefined) &&
     !content.fileUri;
 
   const finalContent = needsDownload

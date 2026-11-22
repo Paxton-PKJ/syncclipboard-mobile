@@ -21,9 +21,16 @@ import { historyService } from '../history/HistoryService';
 import { localClipboard } from '../clipboard/LocalClipboard';
 import { calculateTextHash } from '../../utils/hash';
 import i18n from '@/i18n';
+import { isDownloadSizeLimitExceededError } from '@/errors';
 import { logStartupPoint, getStartupElapsedMs } from '../StartupTiming';
 
 const STARTUP_BASELINE_WINDOW_MS = 2_000;
+const UTF8_MAX_BYTES_PER_UTF16_UNIT = 3;
+
+type AutoDownloadDecision =
+  | { action: 'download' }
+  | { action: 'downloadWithLimit'; maxBytes: number }
+  | { action: 'skip'; reason: string };
 
 /** 判断下一次剪贴板内容是否应仅作为应用启动基线。 */
 function shouldUseStartupBaseline(
@@ -119,7 +126,7 @@ class ClipboardChangedHandler {
     if (fileUri && !content.fileUri) {
       console.log('[ClipboardChangedHandler] Found existing file in history');
       content = { ...content, fileUri };
-    } else if (content.hasData && content.fileName && content.fileSize !== undefined) {
+    } else if (content.hasData && content.fileName) {
       const downloadedContent = await this.tryAutoDownload(content, config);
       if (!downloadedContent) {
         return;
@@ -134,24 +141,82 @@ class ClipboardChangedHandler {
     await this.tryAutoCopyToClipboard(content, config);
   }
 
+  private resolveAutoDownloadDecision(
+    content: ClipboardContent,
+    autoDownloadMaxSize: number
+  ): AutoDownloadDecision {
+    if (
+      typeof content.fileSize === 'number' &&
+      Number.isFinite(content.fileSize) &&
+      content.fileSize >= 0
+    ) {
+      return content.fileSize <= autoDownloadMaxSize
+        ? { action: 'download' }
+        : {
+            action: 'skip',
+            reason: `Content too large (${content.fileSize} > ${autoDownloadMaxSize})`,
+          };
+    }
+    if (
+      content.type === 'Text' &&
+      typeof content.textLength === 'number' &&
+      Number.isFinite(content.textLength) &&
+      content.textLength > 0
+    ) {
+      // 服务端 TextProfile.size 为 UTF-16 字符数而非字节数；
+      // 合法 UTF-8 下每个 UTF-16 代码单元占 1~3 字节：
+      // 最坏上界未超限直接放行；最小下界已超限直接跳过；介于两者之间时在下载流中执行硬上限。
+      const minBytes = content.textLength;
+      const maxBytes = content.textLength * UTF8_MAX_BYTES_PER_UTF16_UNIT;
+      if (maxBytes <= autoDownloadMaxSize) {
+        return { action: 'download' };
+      }
+      if (minBytes > autoDownloadMaxSize) {
+        return {
+          action: 'skip',
+          reason: `Content too large (min ${minBytes} > ${autoDownloadMaxSize})`,
+        };
+      }
+      return { action: 'downloadWithLimit', maxBytes: autoDownloadMaxSize };
+    }
+    if (
+      content.type === 'Text' &&
+      Number.isFinite(autoDownloadMaxSize) &&
+      autoDownloadMaxSize > 0
+    ) {
+      return { action: 'downloadWithLimit', maxBytes: autoDownloadMaxSize };
+    }
+    return { action: 'skip', reason: 'Content byte size unknown' };
+  }
+
   private async tryAutoDownload(
     content: ClipboardContent,
     config: AppConfig
   ): Promise<ClipboardContent | null> {
     const autoDownloadMaxSize = config?.autoDownloadMaxSize ?? 5 * 1024 * 1024;
+    const decision = this.resolveAutoDownloadDecision(content, autoDownloadMaxSize);
 
-    if (content.fileSize! > autoDownloadMaxSize) {
-      console.log(
-        `[ClipboardChangedHandler] File too large (${content.fileSize} > ${autoDownloadMaxSize}), skipping auto-download`
-      );
+    if (decision.action === 'skip') {
+      console.log(`[ClipboardChangedHandler] ${decision.reason}, skipping auto-download`);
       return null;
     }
 
     try {
-      const result = await downloadRemoteClipboard(content);
+      const result =
+        decision.action === 'downloadWithLimit'
+          ? await downloadRemoteClipboard(content, undefined, undefined, {
+              maxBytes: decision.maxBytes,
+            })
+          : await downloadRemoteClipboard(content);
       console.log('[ClipboardChangedHandler] Auto-download completed');
       return result;
     } catch (error) {
+      if (isDownloadSizeLimitExceededError(error)) {
+        console.log(
+          `[ClipboardChangedHandler] Content exceeded auto-download limit (${autoDownloadMaxSize} bytes), skipping auto-download`
+        );
+        return null;
+      }
       const err = error as Error;
       if (err?.name !== 'AbortError') {
         console.error('[ClipboardChangedHandler] Auto-download failed:', error);
@@ -165,6 +230,7 @@ class ClipboardChangedHandler {
     config: AppConfig
   ): Promise<void> {
     if (content.type !== 'Text' && content.type !== 'Image') return;
+    if (content.type === 'Text' && content.hasData && !content.fileUri) return;
     if (content.type === 'Image' && (config.autoCopyTextOnly || !content.fileUri)) return;
 
     const autoSyncEnabled = config?.autoSync ?? false;

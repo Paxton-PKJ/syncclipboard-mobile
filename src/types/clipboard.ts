@@ -38,7 +38,7 @@ export interface HistoryItem {
   /** 数据文件名 */
   dataName?: string;
 
-  /** 文件大小（字节） */
+  /** 文本为完整字符数（string.length），其他类型为文件字节数 */
   size?: number;
 
   /** 创建时间戳 */
@@ -140,8 +140,11 @@ export interface ClipboardContent {
   /** 文件名 */
   fileName?: string;
 
-  /** 文件大小 */
+  /** 文件字节数；文本仅在已知本地文件实际大小时设置，不承载服务端字符数 */
   fileSize?: number;
+
+  /** 完整文本的 UTF-16 代码单元数量，仅用于展示与协议元数据；远端 hasData 文本缺失服务端大小时保持 undefined */
+  textLength?: number;
 
   /** Profile hash（用于服务器上传，遵循服务器规则） */
   profileHash?: string;

@@ -19,11 +19,14 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import androidx.core.content.FileProvider
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.channels.Channels
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
@@ -839,15 +842,17 @@ class NativeUtilModule : Module() {
             return@Function jobId
         }
 
-        Function("startDownloadFile") { url: String, headers: Map<String, String>, fileUri: String ->
+        Function("startDownloadFile") { url: String, headers: Map<String, String>, fileUri: String, maxBytes: Double ->
             val jobId = UUID.randomUUID().toString()
             val cancelFlag = AtomicBoolean(false)
             cancelFlags[jobId] = cancelFlag
             val future = CompletableFuture<Any>()
             pendingJobs[jobId] = future
+            val maxBytesLong = if (maxBytes.isFinite() && maxBytes > 0.0) maxBytes.toLong() else -1L
 
             executor.submit {
                 var connection: HttpURLConnection? = null
+                var stagingFile: File? = null
                 try {
                     val path = resolveFilePath(fileUri)
                     val file = File(path)
@@ -878,54 +883,55 @@ class NativeUtilModule : Module() {
                         return@submit
                     }
 
-                    connection.inputStream.use { input ->
-                        file.outputStream().use { output ->
-                            val buffer = ByteArray(UPLOAD_BUFFER_SIZE)
-                            var read: Int
-                            var bytesRead = 0L
-                            val totalBytes = connection.contentLengthLong
-                            var lastReportTime = 0L
-                            while (input.read(buffer).also { read = it } != -1) {
-                                if (cancelFlag.get()) {
-                                    cancelFlags.remove(jobId)
-                                    file.delete()
-                                    future.complete(CancelledException())
-                                    return@submit
-                                }
-                                output.write(buffer, 0, read)
-                                bytesRead += read
+                    val totalBytes = connection.contentLengthLong
+                    if (maxBytesLong > 0 && totalBytes > maxBytesLong) {
+                        cancelFlags.remove(jobId)
+                        future.complete(DownloadSizeLimitExceededException(totalBytes, maxBytesLong))
+                        return@submit
+                    }
 
-                                val currentTime = System.currentTimeMillis()
-                                if (currentTime - lastReportTime >= 1000) {
-                                    lastReportTime = currentTime
-                                    val progress = if (totalBytes > 0) {
-                                        bytesRead.toDouble() / totalBytes.toDouble()
-                                    } else {
-                                        -1.0
-                                    }
+                    val tempFile = createDownloadStagingFile(file)
+                    stagingFile = tempFile
+
+                    connection.inputStream.use { input ->
+                        tempFile.outputStream().use { output ->
+                            copyBoundedStream(
+                                input = input,
+                                output = output,
+                                totalBytes = totalBytes,
+                                maxBytes = maxBytesLong,
+                                bufferSize = UPLOAD_BUFFER_SIZE,
+                                isCancelled = { cancelFlag.get() },
+                                onProgress = { bytesRead, total, progress ->
                                     sendEvent(EVENT_DOWNLOAD_PROGRESS, mapOf(
                                         "jobId" to jobId,
                                         "progress" to progress,
                                         "bytesRead" to bytesRead.toDouble(),
-                                        "totalBytes" to totalBytes.toDouble()
+                                        "totalBytes" to total.toDouble()
                                     ))
                                 }
-                            }
-                            output.flush()
-
-                            val progress = if (totalBytes > 0) 1.0 else -1.0
-                            sendEvent(EVENT_DOWNLOAD_PROGRESS, mapOf(
-                                "jobId" to jobId,
-                                "progress" to progress,
-                                "bytesRead" to bytesRead.toDouble(),
-                                "totalBytes" to totalBytes.toDouble()
-                            ))
+                            )
                         }
+                    }
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    } else if (!tempFile.renameTo(file)) {
+                        throw IOException("Failed to finalize downloaded file: ${file.path}")
                     }
 
                     cancelFlags.remove(jobId)
                     future.complete("success")
+                } catch (_: DownloadCancelledSignal) {
+                    stagingFile?.let { runCatching { if (it.exists()) it.delete() } }
+                    cancelFlags.remove(jobId)
+                    future.complete(CancelledException())
+                } catch (e: DownloadSizeLimitExceededSignal) {
+                    stagingFile?.let { runCatching { if (it.exists()) it.delete() } }
+                    cancelFlags.remove(jobId)
+                    future.complete(DownloadSizeLimitExceededException(e.actualBytes, e.maxBytes))
                 } catch (e: Exception) {
+                    stagingFile?.let { runCatching { if (it.exists()) it.delete() } }
                     cancelFlags.remove(jobId)
                     future.complete(DownloadErrorException(e.message ?: "Unknown error", e))
                 } finally {
@@ -1286,5 +1292,65 @@ class DownloadErrorException(message: String, cause: Throwable? = null) : CodedE
 class UnexpectedResultException(type: String) : CodedException("Unexpected result type: $type")
 
 class WaitForJobException(message: String, cause: Throwable? = null) : CodedException(message, cause)
+
+internal fun createDownloadStagingFile(destination: File): File =
+    File.createTempFile(".download-", ".part", destination.absoluteFile.parentFile)
+
+internal class DownloadCancelledSignal : Exception()
+
+internal class DownloadSizeLimitExceededSignal(val actualBytes: Long, val maxBytes: Long) : Exception()
+
+internal fun copyBoundedStream(
+    input: InputStream,
+    output: OutputStream,
+    totalBytes: Long,
+    maxBytes: Long,
+    bufferSize: Int = 8 * 1024,
+    isCancelled: () -> Boolean,
+    onProgress: (bytesRead: Long, totalBytes: Long, progress: Double) -> Unit
+): Long {
+    if (maxBytes > 0 && totalBytes > maxBytes) {
+        throw DownloadSizeLimitExceededSignal(totalBytes, maxBytes)
+    }
+
+    val buffer = ByteArray(bufferSize)
+    var read: Int
+    var bytesRead = 0L
+    var lastReportTime = 0L
+
+    while (input.read(buffer).also { read = it } != -1) {
+        if (isCancelled()) {
+            throw DownloadCancelledSignal()
+        }
+        bytesRead += read
+        if (maxBytes > 0 && bytesRead > maxBytes) {
+            throw DownloadSizeLimitExceededSignal(bytesRead, maxBytes)
+        }
+        output.write(buffer, 0, read)
+
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastReportTime >= 1000) {
+            lastReportTime = currentTime
+            val progress = if (totalBytes > 0) {
+                bytesRead.toDouble() / totalBytes.toDouble()
+            } else {
+                -1.0
+            }
+            onProgress(bytesRead, totalBytes, progress)
+        }
+    }
+    output.flush()
+
+    val finalProgress = if (totalBytes > 0) 1.0 else -1.0
+    onProgress(bytesRead, totalBytes, finalProgress)
+    return bytesRead
+}
+
+class DownloadSizeLimitExceededException(actualBytes: Long, maxBytes: Long) :
+    CodedException(
+        "ERR_DOWNLOAD_SIZE_LIMIT_EXCEEDED",
+        "Download size ($actualBytes bytes) exceeds limit ($maxBytes bytes)",
+        null
+    )
 
 class ZipErrorException(message: String, cause: Throwable? = null) : CodedException(message, cause)

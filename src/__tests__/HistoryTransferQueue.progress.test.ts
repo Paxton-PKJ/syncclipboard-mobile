@@ -7,6 +7,7 @@ jest.mock('../utils/hash', () => ({
 import { HistoryTransferQueue } from '../services/history/HistoryTransferQueue';
 import type { TransferTask } from '../services/history/HistoryTransferQueue';
 import type { IHistoryAPI } from '../api/history';
+import { DownloadSizeLimitExceededError } from '../errors';
 import { createHistoryItem } from '../types/clipboard';
 import type { ClipboardContent } from '../types/clipboard';
 import type { ProgressDetail } from '../types/progress';
@@ -25,7 +26,11 @@ jest.mock('../utils/clipboard/convert', () => ({
   historyItemToDto: jest.fn(),
 }));
 jest.mock('expo-file-system', () => ({
-  File: jest.fn((dir: { uri: string }, name: string) => ({ uri: `${dir.uri}/${name}` })),
+  File: jest.fn((dir: { uri: string }, name: string) => ({
+    uri: `${dir.uri}/${name}`,
+    size: 12,
+    exists: true,
+  })),
 }));
 
 const mockStorage = { getItem: jest.fn(), updateItem: jest.fn().mockResolvedValue(undefined) };
@@ -180,4 +185,104 @@ it('downloaded images retain a byte hash in storage and returned content', async
     localClipboardHash: 'image-bytes',
   });
   expect(result.localClipboardHash).toBe('image-bytes');
+});
+
+it('forwards maxBytes to historyAPI.downloadData and aborts without retrying on limit exceeded', async () => {
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  mockStorage.getItem.mockResolvedValue(
+    createHistoryItem({
+      type: 'Text',
+      profileHash: 'limited-text',
+      timestamp: 100,
+      text: 'preview',
+      hasData: true,
+      dataName: 'limited.txt',
+      size: 2_000_000,
+    })
+  );
+
+  const downloadData = jest.fn(async (_pid, uri) => uri);
+  const queue = new HistoryTransferQueue({ retryDelayMs: 10 });
+  queue.setHistoryAPI({ downloadData } as unknown as IHistoryAPI);
+
+  await queue.executeImmediateDownload(
+    {
+      type: 'Text',
+      profileHash: 'limited-text',
+      text: 'preview',
+      hasData: true,
+      fileName: 'limited.txt',
+    },
+    undefined,
+    undefined,
+    5 * 1024 * 1024
+  );
+  expect(downloadData).toHaveBeenCalledWith(
+    'Text-limited-text',
+    'file://history/limited.txt',
+    expect.any(AbortSignal),
+    expect.any(Function),
+    5 * 1024 * 1024
+  );
+
+  jest.clearAllMocks();
+  const limitError = new DownloadSizeLimitExceededError('Download size (6000000) exceeds limit');
+  const failingDownload = jest.fn().mockRejectedValue(limitError);
+  queue.setHistoryAPI({ downloadData: failingDownload } as unknown as IHistoryAPI);
+  const snapshots: TransferTask[] = [];
+  queue.onTaskStatusChanged((task) => snapshots.push({ ...task }));
+
+  await expect(
+    queue.executeImmediateDownload(
+      {
+        type: 'Text',
+        profileHash: 'limited-text',
+        text: 'preview',
+        hasData: true,
+        fileName: 'limited.txt',
+      },
+      undefined,
+      undefined,
+      5 * 1024 * 1024
+    )
+  ).rejects.toThrow(DownloadSizeLimitExceededError);
+
+  expect(mockStorage.updateItem).not.toHaveBeenCalled();
+  expect(snapshots.every((t) => t.status !== 'waitForRetry' && t.failureCount === 0)).toBe(true);
+  expect(queue.getPendingCount()).toBe(0);
+  expect(queue.getActiveCount()).toBe(0);
+});
+
+it.each([10, 12])('共享手动下载时，限额 %i 的调用者独立检查实际文件大小', async (limit) => {
+  const content = { type: 'Text' as const, profileHash: 'hash', text: 'preview', hasData: true };
+  mockStorage.getItem.mockResolvedValue(createHistoryItem({ ...content, timestamp: 0 }));
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const downloadData = jest.fn(async (_pid, uri) => {
+    await gate;
+    return uri;
+  });
+  const queue = new HistoryTransferQueue();
+  queue.setHistoryAPI({ downloadData } as unknown as IHistoryAPI);
+  const manual = queue.executeImmediateDownload(content);
+  await Promise.resolve();
+  const limited = queue.executeImmediateDownload(content, undefined, undefined, limit);
+  finish();
+  await expect(manual).resolves.toMatchObject({ fileUri: 'file://history/data' });
+  if (limit < 12) await expect(limited).rejects.toThrow(DownloadSizeLimitExceededError);
+  else await expect(limited).resolves.toMatchObject({ fileUri: 'file://history/data' });
+  expect(downloadData).toHaveBeenCalledTimes(1);
+});
+
+// 历史页只等待入队，任务被取消时可能没有调用者订阅 awaiter。
+it.each(['download', 'upload'] as const)('排队的 %s 任务取消后允许稍后观察拒绝', async (type) => {
+  const queue = new HistoryTransferQueue();
+  const id = 'Text-hash';
+  const task = await (type === 'download' ? queue.addDownloadTask(id) : queue.addUploadTask(id));
+  expect(queue.cancelTask(id, type)).toBe(true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await expect(task.awaiter).rejects.toThrow('Task cancelled');
+  expect(queue.getPendingCount()).toBe(0);
 });
