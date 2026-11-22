@@ -22,6 +22,47 @@ class IncomingContentParserClipDataTest {
     }
 
     @Test
+    fun `Chrome link text wins over the granted sharesheet preview image`() {
+        val url = "https://example.org/article"
+        val preview = Uri.parse("content://browser/favicon")
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, url)
+            clipData = ClipData.newRawUri("preview", preview)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val source = IncomingContentParser.parseShareIntent(intent)
+        assertEquals(ParsedIncomingSource.Kind.TEXT, source.kind)
+        assertEquals(url, source.text)
+        assertEquals(emptyList<Uri>(), source.uris)
+    }
+
+    @Test
+    fun `single SEND with explicit text and stream preserves text priority`() {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            putExtra(Intent.EXTRA_TEXT, "caption")
+            putExtra(Intent.EXTRA_STREAM, Uri.parse("content://gallery/file"))
+        }
+        assertEquals("caption", IncomingContentParser.parseShareIntent(intent).text)
+    }
+
+    @Test
+    fun `only explicit streams become share attachments`() {
+        val first = Uri.parse("content://files/first")
+        val second = Uri.parse("content://files/second")
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            clipData = ClipData.newRawUri("preview", Uri.parse("content://gallery/preview"))
+        }
+        assertEquals(ParsedIncomingSource.Kind.EMPTY, IncomingContentParser.parseShareIntent(intent).kind)
+        intent.putExtra(Intent.EXTRA_STREAM, first)
+        assertEquals(listOf(first), IncomingContentParser.parseShareIntent(intent).uris)
+        intent.action = Intent.ACTION_SEND_MULTIPLE
+        intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(second, first))
+        intent.putExtra(Intent.EXTRA_TEXT, "caption")
+        assertEquals(listOf(second, first), IncomingContentParser.parseShareIntent(intent).uris)
+    }
+
+    @Test
     fun `share grants cover only data and clip URIs with the read flag`() {
         val clipUri = Uri.parse("content://external/clip")
         val dataUri = Uri.parse("content://external/data")
