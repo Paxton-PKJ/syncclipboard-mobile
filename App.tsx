@@ -183,15 +183,16 @@ export default function App() {
       <ThemeProvider>
         <I18nProvider>
           <ThemedStatusBar />
-          <DropTarget
-            style={styles.container}
-            enabled={dropEnabled}
-            acceptsDrop={!!activeServer}
-            onDragStateChange={handleDropDragStateChange}
-            onDropReceived={handleDropReceived}
-          >
-            {appMode === 'checking' ? null : <AppNavigator />}
-          </DropTarget>
+          {appMode === 'checking' ? null : <AppNavigator />}
+          <View pointerEvents="none" collapsable={false} style={StyleSheet.absoluteFill}>
+            <DropTarget
+              style={styles.container}
+              enabled={dropEnabled}
+              acceptsDrop={!!activeServer}
+              onDragStateChange={handleDropDragStateChange}
+              onDropReceived={handleDropReceived}
+            />
+          </View>
           <DropHoverOverlay
             visible={dropEnabled && dropDragState.active}
             entered={dropDragState.entered}

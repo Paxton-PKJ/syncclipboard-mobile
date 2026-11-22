@@ -4,17 +4,11 @@ import android.content.ContentResolver
 import android.content.Context
 import android.os.Build
 import android.view.DragEvent
-import android.view.View
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
 
-/**
- * 原生拖放接收容器。
- * - Fabric 独占 React 子视图布局，因此自测量自身并用 no-op onLayout 避免二次布局冲突。
- * - 在外部拖拽激活期间直接处理 DragEvent，避免内部 TextInput 抢占文本拖放并维持全屏落点语义。
- * - 带有非空 localState 的本应用内拖出事件直接放行给原始手势树，绝不触发自拖入。
- */
+/** 透明拖放目标。由系统分发拖拽焦点及 ENTERED/EXITED，普通触摸由下层 RN 界面处理。 */
 class DropTargetView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
     private val onDragStateChange by EventDispatcher()
     private val onDropReceived by EventDispatcher()
@@ -33,37 +27,18 @@ class DropTargetView(context: Context, appContext: AppContext) : ExpoView(contex
             }
         }
 
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        setMeasuredDimension(
-            View.getDefaultSize(suggestedMinimumWidth, widthMeasureSpec),
-            View.getDefaultSize(suggestedMinimumHeight, heightMeasureSpec)
-        )
-    }
-
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {}
-
-    override fun dispatchDragEvent(event: DragEvent): Boolean {
-        if (event.localState != null) {
-            return super.dispatchDragEvent(event)
-        }
-        if (!dropEnabled && !dragActive) {
-            return super.dispatchDragEvent(event)
-        }
-        return handleExternalDragEvent(event)
-    }
-
     override fun onDetachedFromWindow() {
         updateDragState(active = false, entered = false)
         super.onDetachedFromWindow()
     }
 
-    private fun handleExternalDragEvent(event: DragEvent): Boolean {
+    override fun onDragEvent(event: DragEvent): Boolean {
         return when (event.action) {
             DragEvent.ACTION_DRAG_STARTED -> {
                 if (!dropEnabled || event.localState != null) {
                     false
                 } else if (!IncomingContentParser.canAcceptClipDescription(event.clipDescription)) {
-                    super.dispatchDragEvent(event)
+                    super.onDragEvent(event)
                 } else {
                     updateDragState(active = true, entered = false)
                     true
@@ -143,7 +118,7 @@ class DropTargetView(context: Context, appContext: AppContext) : ExpoView(contex
                 true
             }
 
-            else -> super.dispatchDragEvent(event)
+            else -> super.onDragEvent(event)
         }
     }
 
